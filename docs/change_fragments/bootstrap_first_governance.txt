@@ -1,0 +1,1 @@
+Governance corpus now treats bootstrap-first full repository checkout as the primary initial authority workspace input transport and keeps uploaded workspace snapshot zips as fallback transport for the same authority workspace content.
