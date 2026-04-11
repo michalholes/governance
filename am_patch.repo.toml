@@ -60,7 +60,7 @@ gate_typescript_extensions = [".js", ".ts", ".tsx", ".mts", ".cts", ".d.ts"]
 gate_typescript_command = ["tsc", "--noEmit", "--pretty", "false", "--allowJs", "--checkJs", "--target", "ES2022", "--lib", "ES2022,DOM"]
 gate_typescript_mode = "auto"
 gate_typescript_base_tsconfig = "tsconfig.json"
-typescript_targets = ["scripts/patchhub/static/", "types/"]
+typescript_targets = ["src/", "types/"]
 
 gates_skip_docs = false
 gate_docs_include = [""]
@@ -70,11 +70,8 @@ gate_docs_required_files = [""]
 
 gates_skip_badguys = true
 gate_badguys_mode = "auto"
-gate_badguys_trigger_prefixes = ["scripts/am_patch"]
-gate_badguys_trigger_files = [
-  "scripts/am_patch.py",
-  "scripts/am_patch_instructions.md",
-]
+gate_badguys_trigger_prefixes = []
+gate_badguys_trigger_files = []
 gate_badguys_command = ["badguys/badguys.py", "--no-suite-jail"]
 
 gates_skip_monolith = false
@@ -141,9 +138,9 @@ audit_rubric_guard = false
 gate_ruff_mode = "auto"
 gate_mypy_mode = "auto"
 gate_pytest_mode = "auto"
-gate_pytest_py_prefixes = ["governance", "badguys", "scripts", "tests"]
-gate_pytest_js_prefixes = ["scripts/patchhub/static"]
-pytest_routing_mode = "bucketed"
+gate_pytest_py_prefixes = ["src", "tests"]
+gate_pytest_js_prefixes = []
+pytest_routing_mode = "legacy"
 pytest_full_suite_prefixes = [
   "pyproject.toml",
   "pytest.ini",
@@ -153,7 +150,7 @@ pytest_targets = ["tests"]
 mypy_targets = ["src"]
 
 [pytest_roots]
-"amp.*" = "scripts/am_patch/"
+"gov.*" = "scripts/am_patch/"
 "*" = "*"
 
 [pytest_tree]
