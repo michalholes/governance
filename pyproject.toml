@@ -1,7 +1,7 @@
 [project]
-name = "patchhub"
+name = "governance"
 version = "2.0.0-alpha.1"
-description = "Toolkit for patching Python, Javascript and text files"
+description = "Governance authority corpus and governance toolkit"
 authors = [
     {name = "Michal Holes", email = "michal@holes.sk"}
 ]
@@ -9,58 +9,28 @@ requires-python = ">=3.11"
 readme = "README.md"
 license = {text = "MIT"}
 
-dependencies = [
-    "pydantic>=2.0.0",
-    "pyyaml>=6.0",
-    "typer>=0.9.0",
-    "rich>=13.0.0",
-    "mutagen>=1.47.0",
-]
-
-
-
+dependencies = []
 
 [project.optional-dependencies]
 dev = [
-    "fastapi>=0.104.0",
-    "uvicorn>=0.24.0",
-    "python-multipart>=0.0.9",
     "pytest>=7.4.0",
     "pytest-asyncio>=0.26.0",
     "pytest-timeout",
     "pytest-forked",
-    "pytest-playwright-asyncio",
     "pytest-cov>=4.1.0",
     "mypy>=1.5.0",
     "ruff>=0.0.290",
-    "types-pyyaml",
-    "httpx",
 ]
-
-all = [
-    "rich>=13.0.0",
-    "mutagen>=1.47.0",
-]
-
-web = [
-    "fastapi>=0.104.0",
-    "uvicorn>=0.24.0",
-    "python-multipart>=0.0.6",
-    "websockets>=12.0",
-]
-
-[project.scripts]
-audiomason = "audiomason.core:main"
 
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.mypy]
-mypy_path = "$MYPY_CONFIG_FILE_DIR,$MYPY_CONFIG_FILE_DIR/scripts"
+mypy_path = "$MYPY_CONFIG_FILE_DIR/src"
 explicit_package_bases = true
 namespace_packages = true
-exclude = ["patches/", "tests/", "venv/", "__pycache__/"]
+exclude = ["patches/", "venv/", "__pycache__/"]
 python_version = "3.11"
 strict = false
 warn_return_any = false
@@ -76,16 +46,10 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 warn_no_return = true
 
-
-[[tool.mypy.overrides]]
-module = ["uvicorn", "fastapi", "fastapi.*"]
-ignore_missing_imports = true
-
-
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-src = ["tests"]
+src = ["src", "tests"]
 exclude = ["patches", "audit"]
 
 [tool.ruff.lint]
@@ -97,10 +61,10 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "--strict-markers --cov=src/audiomason --cov-report=term-missing"
+addopts = "--strict-markers --cov=src/governance --cov-report=term-missing"
 
 [tool.coverage.run]
-source = ["src/audiomason"]
+source = ["src/governance"]
 omit = ["*/tests/*", "*/__pycache__/*"]
 
 [tool.coverage.report]
@@ -108,12 +72,11 @@ precision = 2
 show_missing = true
 skip_covered = false
 
-
 [tool.setuptools]
-package-dir = {"" = "."}
+package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
-where = ["src", "."]
-include = ["audiomason*", "plugins*"]
-exclude = ["tests*", "scripts*", "patches*", "docs*", "badguys*"]
-
+where = ["src"]
+include = ["governance*"]
+exclude = ["tests*", "patches*", "docs*"]
+namespaces = true

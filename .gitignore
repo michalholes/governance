@@ -43,14 +43,6 @@ env/
 .DS_Store
 Thumbs.db
 
-# AudioMason specific
-*.m4a
-*.m4b
-*.opus
-*.mp3
-output/
-stage/
-.audiomason/
 
 # Testing
 .pytest_cache/

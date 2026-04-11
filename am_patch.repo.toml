@@ -1,4 +1,4 @@
-# Repo-local AMP policy for the patchhub repo.
+# Repo-local AMP policy for the governance repo.
 # Intended destination: .am_patch/am_patch.repo.toml
 # This file contains only repo-owned policy. Bootstrap/layout/IPC keys stay in the bootstrap config.
 
@@ -9,7 +9,6 @@ require_up_to_date = true
 enforce_main_branch = true
 ascii_only_patch = true
 
-
 [gates]
 compile_check = true
 compile_targets = ["."]
@@ -19,22 +18,16 @@ ruff_autofix = true
 ruff_autofix_legalize_outside = false
 ruff_format = true
 
-# Repo-local Python gate interpreter policy.
 python_gate_mode = "runner"
 python_gate_python = ".venv/bin/python"
 
-# Gate ordering stays bootstrap-owned. Only repo-local gate policy lives here.
 gates_allow_fail = false
 gates_skip_dont_touch = false
 dont_touch_paths = [
   "am_patch.repo.toml",
-  "scripts/am_patch/am_patch.toml",
-  "scripts/patchhub/static/patchhub_bootstrap.js",
   "tsconfig.json",
-  "biome.json",
   "pytest.ini",
   "pyproject.toml",
-  ".github/workflows/ci.yml",
 ]
 apply_failure_partial_gates_policy = "repair_only"
 apply_failure_zero_gates_policy = "repair_only"
@@ -56,28 +49,16 @@ gate_biome_format_command = ["npx", "--yes", "@biomejs/biome", "format", "--writ
 gate_biome_command = ["npx", "--yes", "@biomejs/biome", "lint", "--diagnostic-level=error", "--max-diagnostics=10000"]
 gate_biome_fix_command = ["npx", "--yes", "@biomejs/biome", "lint", "--write", "--diagnostic-level=error", "--max-diagnostics=10000"]
 
-
 gates_skip_typescript = false
 gate_typescript_extensions = [".js", ".ts", ".tsx", ".mts", ".cts", ".d.ts"]
 gate_typescript_command = ["tsc", "--noEmit", "--pretty", "false", "--allowJs", "--checkJs", "--target", "ES2022", "--lib", "ES2022,DOM"]
 gate_typescript_mode = "auto"
 gate_typescript_base_tsconfig = "tsconfig.json"
-typescript_targets = ["scripts/patchhub/static/", "types/"]
+typescript_targets = ["src/governance/", "tests/", "types/"]
 
-gates_skip_docs = false
-gate_docs_include = [""]
-gate_docs_exclude = ["patches", "quarantine"]
-gate_docs_required_files = [""]
+gates_skip_docs = true
 
-
-gates_skip_badguys = false
-gate_badguys_mode = "auto"
-gate_badguys_trigger_prefixes = ["scripts/am_patch"]
-gate_badguys_trigger_files = [
-  "scripts/am_patch.py",
-  "scripts/am_patch_instructions.md",
-]
-gate_badguys_command = ["badguys/badguys.py", "--no-suite-jail"]
+gates_skip_badguys = true
 
 gates_skip_monolith = false
 gate_monolith_enabled = true
@@ -113,25 +94,16 @@ gate_monolith_catchall_dirs = ["utils", "common", "helpers", "misc"]
 gate_monolith_catchall_allowlist = []
 
 gate_monolith_areas_prefixes = [
-  "badguys/",
-  "scripts/am_patch/",
-  "scripts/patchhub/",
+  "src/governance/",
   "tests/",
-  "types/",
 ]
 
 gate_monolith_areas_names = [
-  "badguys",
-  "runner",
-  "patchhub",
+  "governance",
   "tests",
-  "types",
 ]
 
 gate_monolith_areas_dynamic = [
-  "",
-  "",
-  "",
   "",
   "",
 ]
@@ -149,34 +121,24 @@ audit_rubric_guard = false
 gate_ruff_mode = "auto"
 gate_mypy_mode = "auto"
 gate_pytest_mode = "auto"
-gate_pytest_py_prefixes = ["governance", "badguys", "scripts", "tests"]
-gate_pytest_js_prefixes = ["scripts/patchhub/static"]
+gate_pytest_py_prefixes = ["src/governance", "tests"]
+gate_pytest_js_prefixes = []
 pytest_routing_mode = "bucketed"
 pytest_full_suite_prefixes = [
   "pyproject.toml",
   "pytest.ini",
-  "tests/conftest.py",
-  "tests/e2e/conftest.py",
-  "tests/e2e/_server_patchhub.py",
-  "tests/e2e/_asset_inventory.py",
+  "tests/",
 ]
-ruff_targets = ["badguys", "scripts", "governance", "tests"]
+ruff_targets = ["src/governance", "tests"]
 pytest_targets = ["tests"]
-mypy_targets = ["scripts", "badguys", "governance"]
+mypy_targets = ["src/governance", "tests"]
 
 [pytest_roots]
-"amp.*" = "scripts/am_patch/"
+"governance.*" = "src/governance/"
 "*" = "*"
 
 [pytest_tree]
-"amp.phb" = "scripts/patchhub/"
-"amp.badguys" = "badguys/"
+"governance" = "src/governance/"
 
 [pytest_namespace_modules]
-"amp" = ["am_patch", "scripts.am_patch"]
-"amp.phb" = ["patchhub", "scripts.patchhub"]
-"amp.badguys" = ["badguys"]
-
-[pytest_dependencies]
-"amp.phb" = ["amp"]
-"amp.badguys" = ["amp"]
+"governance" = ["governance"]

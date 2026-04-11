@@ -9,11 +9,6 @@
 		"lib": ["ES2022", "DOM"],
 		"skipLibCheck": true
 	},
-	"include": [
-		"plugins/import/ui/web/assets/**/*.js",
-		"plugins/web_interface/ui/assets/**/*.js",
-		"scripts/patchhub/static/**/*.js",
-		"types/**/*.d.ts"
-	],
+	"include": ["src/governance/**/*.js", "tests/**/*.js", "types/**/*.d.ts"],
 	"exclude": ["node_modules", "patches", "**/patches/**"]
 }

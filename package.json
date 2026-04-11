@@ -1,10 +1,8 @@
 {
-	"name": "audiomason2",
+	"name": "governance",
 	"version": "1.0.0",
-	"description": "**Ultra-Modular Audiobook Processing Framework**",
-	"main": "index.js",
+	"description": "Governance authority corpus and governance toolkit",
 	"directories": {
-		"doc": "docs",
 		"test": "tests"
 	},
 	"scripts": {
