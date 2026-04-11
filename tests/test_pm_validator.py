@@ -12,6 +12,9 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = REPO_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -26,7 +29,7 @@ except ModuleNotFoundError as exc:
         allow_module_level=True,
     )
 
-SCRIPT = Path(__file__).resolve().parents[1] / "governance/pm_validator.py"
+SCRIPT = REPO_ROOT / "src/governance/pm_validator.py"
 COMMIT = "Align PM validator monolith checks"
 DEFAULT_TARGET = "audiomason2"
 ALT_TARGET = "patchhub"
@@ -911,7 +914,7 @@ def test_resolver_reuses_canonical_workflow_effective_context() -> None:
 
 
 def test_initial_mode_passes_with_specification_authority_source(tmp_path: Path) -> None:
-    relpath = "governance/rc_resolver.py"
+    relpath = "src/governance/rc_resolver.py"
     before = "VALUE = 1\n"
     after = "VALUE = 2\n"
     snapshot = tmp_path / f"{DEFAULT_TARGET}-main_777.zip"
@@ -927,9 +930,13 @@ def test_initial_mode_passes_with_specification_authority_source(tmp_path: Path)
             source_path="governance/specification.jsonl",
         ),
     )
+    fragment_path = "docs/change_fragments/issue_602.txt"
     _patch_zip(
         patch_zip,
-        {_safe_member(relpath): _git_patch(relpath, before, after)},
+        {
+            _safe_member(relpath): _git_patch(relpath, before, after),
+            _safe_member(fragment_path): _added_patch(fragment_path, "issue 602\n"),
+        },
         issue="602",
     )
 

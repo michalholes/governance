@@ -5,6 +5,9 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = REPO_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -47,7 +50,7 @@ def test_gov_navigator_reuses_canonical_workflow_effective_context() -> None:
 
 
 def test_pm_validator_pack_contract_imports_canonical_workflow_module() -> None:
-    text = (REPO_ROOT / "governance" / "pm_validator_pack_contract.py").read_text(encoding="utf-8")
+    text = (SRC_ROOT / "governance" / "pm_validator_pack_contract.py").read_text(encoding="utf-8")
     assert "from .workflow_effective_context import (" in text
     assert "from workflow_effective_context import (" in text
     assert "from .rc_resolver import (" not in text

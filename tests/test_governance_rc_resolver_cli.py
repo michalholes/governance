@@ -2,23 +2,29 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = REPO_ROOT / "governance" / "rc_resolver.py"
+SRC_ROOT = REPO_ROOT / "src"
+SCRIPT = SRC_ROOT / "governance" / "rc_resolver.py"
 MODULE = [sys.executable, "-m", "governance.rc_resolver"]
 DIRECT = [sys.executable, str(SCRIPT)]
 SPEC_PATH = "governance/specification.jsonl"
-TARGET = "governance/rc_resolver.py"
+TARGET = "src/governance/rc_resolver.py"
 
 
 def _run(cmd: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = str(SRC_ROOT) if not existing else str(SRC_ROOT) + os.pathsep + existing
     return subprocess.run(
         cmd,
         cwd=cwd,
+        env=env,
         capture_output=True,
         text=True,
         check=False,
@@ -27,7 +33,7 @@ def _run(cmd: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
 
 def _write_minimal_snapshot(path: Path) -> None:
     members = {
-        "governance/rc_resolver.py": (REPO_ROOT / "governance" / "rc_resolver.py").read_bytes(),
+        "src/governance/rc_resolver.py": (SRC_ROOT / "governance" / "rc_resolver.py").read_bytes(),
         "governance/specification.jsonl": (
             REPO_ROOT / "governance" / "specification.jsonl"
         ).read_bytes(),
