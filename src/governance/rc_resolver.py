@@ -51,12 +51,9 @@ def _workflow_objects(
         return spec_objects
     if scope != "implementation_scope":
         return spec_objects
-    raw = governance_workflow_raw
-    if raw is None and spec_path != GOVERNANCE_SPEC_PATH:
-        raw = Path(GOVERNANCE_SPEC_PATH).read_bytes()
-    if raw is None:
+    if governance_workflow_raw is None or spec_path == GOVERNANCE_SPEC_PATH:
         return spec_objects
-    return _load_jsonl_bytes(raw)
+    return _load_jsonl_bytes(governance_workflow_raw)
 
 
 UNBOUND = "RULE RESOLVER: FAIL - unbound_target"
@@ -105,7 +102,9 @@ def fail_missing_repo_spec() -> NoReturn:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("target")
-    parser.add_argument("--workspace-snapshot", required=True)
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--workspace-snapshot")
+    group.add_argument("--workspace-root")
     parser.add_argument("--spec", required=True)
     parser.add_argument("--handoff-output", required=True)
     parser.add_argument("--pack-output", required=True)
@@ -116,6 +115,24 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def read_snapshot(path: Path) -> dict[str, bytes]:
     with ZipFile(path, "r") as zf:
         return {name: zf.read(name) for name in zf.namelist() if not name.endswith("/")}
+
+
+def read_workspace_root(path: Path) -> dict[str, bytes]:
+    root = path.resolve()
+    out: dict[str, bytes] = {}
+    for child in sorted(root.rglob("*")):
+        if ".git" in child.relative_to(root).parts:
+            continue
+        if not child.is_file():
+            continue
+        out[child.relative_to(root).as_posix()] = child.read_bytes()
+    return out
+
+
+def read_workspace(args: argparse.Namespace) -> dict[str, bytes]:
+    if args.workspace_root:
+        return read_workspace_root(Path(args.workspace_root))
+    return read_snapshot(Path(args.workspace_snapshot))
 
 
 def split_target(raw: str) -> tuple[str, str | None]:
@@ -396,7 +413,7 @@ def handoff_text(target: str, scope: str, mode: str, workflow_contract: dict) ->
 def main(argv: list[str]) -> None:
     args = parse_args(argv)
     repo_path, symbol = split_target(args.target)
-    entries = read_snapshot(Path(args.workspace_snapshot))
+    entries = read_workspace(args)
     resolve_symbol(entries, repo_path, symbol)
     scope = target_scope(repo_path)
     mode = target_mode(scope)
@@ -407,10 +424,14 @@ def main(argv: list[str]) -> None:
         raise SystemExit(1)
     if scope == "implementation_scope" and REPO_SPEC_PATH not in entries:
         fail_missing_repo_spec()
-    spec_raw = Path(args.spec).read_bytes()
+    spec_raw = entries.get(args.spec)
+    if spec_raw is None:
+        if args.spec == REPO_SPEC_PATH:
+            fail_missing_repo_spec()
+        fail_unbound()
     governance_workflow_raw = None
     if scope == "implementation_scope" and args.spec != GOVERNANCE_SPEC_PATH:
-        governance_workflow_raw = Path(GOVERNANCE_SPEC_PATH).read_bytes()
+        governance_workflow_raw = entries.get(GOVERNANCE_SPEC_PATH)
     pack_bytes = build_pack(
         spec_raw,
         mode,

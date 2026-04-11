@@ -30,6 +30,9 @@ if TYPE_CHECKING or __package__:
     from .pm_validator_runtime_support import (
         not_runnable_results as _support_not_runnable_results,
     )
+    from .pm_validator_runtime_support import (
+        read_workspace_root as _support_read_root,
+    )
 else:
     from pm_validator_runtime_support import (
         SupportRule,
@@ -45,6 +48,9 @@ else:
     )
     from pm_validator_runtime_support import (
         not_runnable_results as _support_not_runnable_results,
+    )
+    from pm_validator_runtime_support import (
+        read_workspace_root as _support_read_root,
     )
 
 PATCH_RE = re.compile(r"^issue_(?P<issue>\d+)_v(?P<version>[1-9]\d*)\.zip$")
@@ -175,7 +181,8 @@ def _snapshot_target(path: Path) -> str | None:
     return None if match is None else match.group("target")
 
 
-def _initial_target_source_rule(path: Path) -> tuple[RuleResult, str | None]:
+def _initial_target_source_rule(path: Path | str) -> tuple[RuleResult, str | None]:
+    path = Path(path)
     target = _snapshot_target(path)
     if target is None:
         detail = f"invalid_workspace_snapshot_basename:{path.name}"
@@ -199,10 +206,10 @@ def _target_match_rule(rule_id: str, expected: str, actual: str) -> RuleResult:
     return RuleResult(rule_id, "PASS" if actual == expected else "FAIL", detail)
 
 
-def _repair_snapshot_consistency_rule(path: Path, overlay_target: str) -> RuleResult:
-    snapshot_target = _snapshot_target(path)
+def _repair_snapshot_consistency_rule(path: Path | str, overlay_target: str) -> RuleResult:
+    snapshot_target = _snapshot_target(Path(path))
     if snapshot_target is None:
-        detail = f"snapshot_basename_not_matching_contract:{path.name}"
+        detail = f"snapshot_basename_not_matching_contract:{Path(path).name}"
         return RuleResult("REPAIR_TARGET_SNAPSHOT_CONSISTENCY", "SKIP", detail)
     detail = f"overlay={overlay_target}:snapshot={snapshot_target}"
     status = "PASS" if overlay_target == snapshot_target else "FAIL"
@@ -300,15 +307,15 @@ def _authority_files(
     decision_paths: list[str],
     patch_members: list[tuple[str, bytes]],
 ) -> tuple[dict[str, bytes], list[str], list[tuple[str, bytes]], list[RuleResult], str]:
-    snapshot = (
-        None if not args.workspace_snapshot else _iter_zip_files(Path(args.workspace_snapshot))
-    )
+    snapshot = None if not args.workspace_snapshot else _iter_zip_files(args.workspace_snapshot)
+    workspace_root = None if not args.workspace_root else _support_read_root(args.workspace_root)
     overlay = None if not args.repair_overlay else _iter_zip_files(Path(args.repair_overlay))
     try:
         ctx = _support_build_validation_context(
             decision_paths=decision_paths,
             patch_members=patch_members,
             snapshot_files=snapshot,
+            workspace_root_files=workspace_root,
             overlay_files=overlay,
             supplemental_files=list(args.supplemental_file),
         )
@@ -913,6 +920,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "--workspace-snapshot",
         help="Workspace snapshot zip for initial mode or supplemental files.",
     )
+    parser.add_argument("--workspace-root", help="Local full-repository workspace root.")
     parser.add_argument(
         "--repair-overlay",
         help="patched_issue*.zip overlay for repair mode.",
@@ -938,13 +946,21 @@ def main(argv: list[str] | None = None) -> int:
             raise ValidationError("patch_not_found")
         instructions_arg = Path(args.instructions_zip)
         instructions_path = instructions_arg.resolve() if instructions_arg.is_file() else None
-        if args.repair_overlay:
-            if not Path(args.repair_overlay).is_file():
-                raise ValidationError("repair_overlay_not_found")
-        elif not args.workspace_snapshot:
-            raise ValidationError("workspace_snapshot_required_for_initial_mode")
+        if args.repair_overlay and not Path(args.repair_overlay).is_file():
+            raise ValidationError("repair_overlay_not_found")
+        if args.workspace_snapshot and args.workspace_root:
+            code = (
+                "repair_supplemental_authority_conflict"
+                if args.repair_overlay
+                else "workspace_input_conflict_for_initial_mode"
+            )
+            raise ValidationError(code)
+        if not args.repair_overlay and not (args.workspace_snapshot or args.workspace_root):
+            raise ValidationError("workspace_input_required_for_initial_mode")
         if args.workspace_snapshot and not Path(args.workspace_snapshot).is_file():
             raise ValidationError("workspace_snapshot_not_found")
+        if args.workspace_root and not Path(args.workspace_root).is_dir():
+            raise ValidationError("workspace_root_not_found")
         if args.supplemental_file and not args.repair_overlay:
             raise ValidationError("supplemental_file_requires_repair_mode")
         patch_path = Path(args.patch).resolve()
@@ -969,14 +985,15 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 if args.workspace_snapshot:
                     results.append(
-                        _repair_snapshot_consistency_rule(
-                            Path(args.workspace_snapshot), overlay_target
-                        )
+                        _repair_snapshot_consistency_rule(args.workspace_snapshot, overlay_target)
                     )
         else:
-            initial_rule, initial_target = _initial_target_source_rule(
-                Path(args.workspace_snapshot)
-            )
+            initial_target: str | None
+            if args.workspace_root:
+                initial_target = Path(args.workspace_root).resolve().name.strip()
+                initial_rule = RuleResult("INITIAL_TARGET_SOURCE", "PASS", initial_target)
+            else:
+                initial_rule, initial_target = _initial_target_source_rule(args.workspace_snapshot)
             results.append(initial_rule)
             if initial_target is not None:
                 results.append(

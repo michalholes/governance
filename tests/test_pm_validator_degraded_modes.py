@@ -31,6 +31,15 @@ def _base():
     return base_module
 
 
+def _workspace_root(path: Path, members: dict[str, bytes]) -> None:
+    base = _base()
+    path.mkdir(parents=True, exist_ok=True)
+    for name, data in base._with_spec(members).items():
+        dst = path / name
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(data)
+
+
 def test_initial_context_uses_full_snapshot_tree() -> None:
     snapshot_files = {
         "scripts/sample.py": b"def value():\n    return 1\n",
@@ -40,6 +49,7 @@ def test_initial_context_uses_full_snapshot_tree() -> None:
         decision_paths=["scripts/sample.py"],
         patch_members=[],
         snapshot_files=snapshot_files,
+        workspace_root_files=None,
         overlay_files=None,
         supplemental_files=[],
     )
@@ -48,12 +58,48 @@ def test_initial_context_uses_full_snapshot_tree() -> None:
     assert ctx.baseline_files == snapshot_files
 
 
+def test_initial_context_uses_full_workspace_root_tree() -> None:
+    workspace_root_files = {
+        "scripts/sample.py": b"def value():\n    return 1\n",
+        "scripts/other.py": b"VALUE = 2\n",
+    }
+    ctx = build_validation_context(
+        decision_paths=["scripts/sample.py"],
+        patch_members=[],
+        snapshot_files=None,
+        workspace_root_files=workspace_root_files,
+        overlay_files=None,
+        supplemental_files=[],
+    )
+    assert ctx.mode == "initial"
+    assert ctx.runnable_paths == ["scripts/sample.py"]
+    assert ctx.baseline_files == workspace_root_files
+
+
+def test_repair_supplemental_workspace_root_is_supported() -> None:
+    workspace_root_files = {"tests/test_sample.txt": b"b\n"}
+    overlay_files = {"scripts/sample.py": b"def value():\n    return 2\n"}
+    ctx = build_validation_context(
+        decision_paths=["tests/test_sample.txt"],
+        patch_members=[],
+        snapshot_files=None,
+        workspace_root_files=workspace_root_files,
+        overlay_files=overlay_files,
+        supplemental_files=["tests/test_sample.txt"],
+    )
+    assert ctx.mode == "repair-supplemental"
+    assert ctx.runnable_paths == ["tests/test_sample.txt"]
+    assert ctx.baseline_files["tests/test_sample.txt"] == b"b\n"
+    assert ctx.degraded_rules == []
+
+
 def test_repair_overlay_only_partitions_paths_and_emits_degraded_rules() -> None:
     overlay_files = {"scripts/sample.py": b"def value():\n    return 2\n"}
     ctx = build_validation_context(
         decision_paths=["scripts/sample.py", "tests/test_sample.txt"],
         patch_members=[],
         snapshot_files=None,
+        workspace_root_files=None,
         overlay_files=overlay_files,
         supplemental_files=[],
     )
@@ -71,7 +117,152 @@ def test_repair_overlay_only_partitions_paths_and_emits_degraded_rules() -> None
         "SKIP",
         "workspace_snapshot_absent",
     ) in verdicts
-    assert ("REPAIR_SUPPLEMENTAL_AUTHORITY", "SKIP", "workspace_snapshot_absent") in verdicts
+    assert ("REPAIR_SUPPLEMENTAL_AUTHORITY", "SKIP", "workspace_authority_input_absent") in verdicts
+
+
+def test_pm_validator_initial_mode_passes_with_workspace_root(tmp_path: Path) -> None:
+    base = _base()
+    relpath = "scripts/sample.py"
+    before = "def value():\n    return 1\n"
+    after = "def value():\n    return 2\n"
+    workspace_root = tmp_path / base.DEFAULT_TARGET
+    patch_zip = tmp_path / "issue_601_v2.zip"
+    instructions_zip = base._instructions_zip(tmp_path / "instructions.zip")
+    _workspace_root(workspace_root, {relpath: before.encode("utf-8")})
+    base._patch_zip(
+        patch_zip,
+        {base._safe_member(relpath): base._git_patch(relpath, before, after)},
+    )
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(base.SCRIPT),
+            "601",
+            base.COMMIT,
+            str(patch_zip),
+            str(instructions_zip),
+            "--workspace-root",
+            str(workspace_root),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert f"RULE INITIAL_TARGET_SOURCE: PASS - {base.DEFAULT_TARGET}" in proc.stdout
+
+
+def test_pm_validator_initial_mode_workspace_root_target_mismatch(tmp_path: Path) -> None:
+    base = _base()
+    relpath = "scripts/sample.py"
+    before = "def value():\n    return 1\n"
+    after = "def value():\n    return 2\n"
+    workspace_root = tmp_path / base.ALT_TARGET
+    patch_zip = tmp_path / "issue_601_v2.zip"
+    instructions_zip = base._instructions_zip(tmp_path / "instructions.zip")
+    _workspace_root(workspace_root, {relpath: before.encode("utf-8")})
+    base._patch_zip(
+        patch_zip,
+        {base._safe_member(relpath): base._git_patch(relpath, before, after)},
+    )
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(base.SCRIPT),
+            "601",
+            base.COMMIT,
+            str(patch_zip),
+            str(instructions_zip),
+            "--workspace-root",
+            str(workspace_root),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 1
+    assert (
+        f"RULE INITIAL_TARGET_MATCH: FAIL - expected={base.ALT_TARGET}:actual={base.DEFAULT_TARGET}"
+        in proc.stdout
+    )
+
+
+def test_pm_validator_initial_mode_rejects_workspace_input_conflict(tmp_path: Path) -> None:
+    base = _base()
+    relpath = "scripts/sample.py"
+    before = "def value():\n    return 1\n"
+    after = "def value():\n    return 2\n"
+    snapshot = tmp_path / f"{base.DEFAULT_TARGET}-main_666.zip"
+    workspace_root = tmp_path / base.DEFAULT_TARGET
+    patch_zip = tmp_path / "issue_601_v2.zip"
+    instructions_zip = base._instructions_zip(tmp_path / "instructions.zip")
+    base._snapshot_zip(snapshot, {relpath: before.encode("utf-8")})
+    workspace_root.mkdir()
+    base._patch_zip(
+        patch_zip,
+        {base._safe_member(relpath): base._git_patch(relpath, before, after)},
+    )
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(base.SCRIPT),
+            "601",
+            base.COMMIT,
+            str(patch_zip),
+            str(instructions_zip),
+            "--workspace-snapshot",
+            str(snapshot),
+            "--workspace-root",
+            str(workspace_root),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 1
+    assert "RULE VALIDATION_ERROR: FAIL - workspace_input_conflict_for_initial_mode" in proc.stdout
+
+
+def test_pm_validator_repair_supplemental_workspace_root_is_supported(tmp_path: Path) -> None:
+    base = _base()
+    relpath = "tests/test_sample.txt"
+    before = "a\n"
+    after = "b\n"
+    workspace_root = tmp_path / base.DEFAULT_TARGET
+    overlay = tmp_path / "patched_issue601_v1.zip"
+    patch_zip = tmp_path / "issue_601_v2.zip"
+    instructions_zip = base._instructions_zip(tmp_path / "instructions.zip")
+    _workspace_root(workspace_root, {relpath: before.encode("utf-8")})
+    base._overlay_zip(overlay, {"scripts/sample.py": b"def value():\n    return 2\n"})
+    base._patch_zip(
+        patch_zip,
+        {base._safe_member(relpath): base._git_patch(relpath, before, after)},
+    )
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(base.SCRIPT),
+            "601",
+            base.COMMIT,
+            str(patch_zip),
+            str(instructions_zip),
+            "--repair-overlay",
+            str(overlay),
+            "--workspace-root",
+            str(workspace_root),
+            "--supplemental-file",
+            relpath,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "RULE GIT_APPLY_CHECK:patches/per_file/tests__test_sample.txt.patch: PASS" in proc.stdout
 
 
 def test_member_local_failures_are_aggregated_before_abort(tmp_path: Path) -> None:

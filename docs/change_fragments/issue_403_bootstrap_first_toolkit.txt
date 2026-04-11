@@ -1,0 +1,2 @@
+Implement bootstrap-first local workspace-root transport for governance toolkit inputs, while retaining uploaded workspace snapshots as fallback transport and preserving fail-closed authority semantics.
+Repair the initial-mode workspace-root target typing so mypy accepts the bootstrap-first transport path.

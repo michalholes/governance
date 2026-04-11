@@ -32,6 +32,18 @@ RuleResultT = TypeVar("RuleResultT")
 RunFn = Callable[[list[str], Path], CompletedProcess[str]]
 
 
+def read_workspace_root(path: Path | str) -> dict[str, bytes]:
+    root = Path(path).resolve()
+    out: dict[str, bytes] = {}
+    for child in sorted(root.rglob("*")):
+        if ".git" in child.relative_to(root).parts:
+            continue
+        if not child.is_file():
+            continue
+        out[child.relative_to(root).as_posix()] = child.read_bytes()
+    return out
+
+
 def _decode_ascii_text(raw: bytes) -> str | None:
     try:
         text = raw.decode("ascii")
@@ -180,14 +192,16 @@ def build_validation_context(
     decision_paths: list[str],
     patch_members: list[tuple[str, bytes]],
     snapshot_files: dict[str, bytes] | None,
+    workspace_root_files: dict[str, bytes] | None,
     overlay_files: dict[str, bytes] | None,
     supplemental_files: list[str],
 ) -> ValidationContext:
+    primary_files = snapshot_files if snapshot_files is not None else workspace_root_files
     if overlay_files is None:
-        if snapshot_files is None:
-            raise ValueError("workspace_snapshot_required_for_initial_mode")
+        if primary_files is None:
+            raise ValueError("workspace_input_required_for_initial_mode")
         return ValidationContext(
-            baseline_files=dict(snapshot_files),
+            baseline_files=dict(primary_files),
             runnable_paths=list(decision_paths),
             runnable_patch_members=list(patch_members),
             degraded_rules=[],
@@ -201,7 +215,7 @@ def build_validation_context(
         for member, raw in patch_members
         if (_member_repo_path(member) or "") in covered_set
     ]
-    if snapshot_files is None:
+    if primary_files is None:
         uncovered = [path for path in decision_paths if path not in baseline]
         degraded = [
             SupportRule(
@@ -229,7 +243,7 @@ def build_validation_context(
                 SupportRule(
                     "REPAIR_SUPPLEMENTAL_AUTHORITY",
                     "SKIP",
-                    "workspace_snapshot_absent",
+                    "workspace_authority_input_absent",
                 ),
             ]
         )
@@ -255,12 +269,12 @@ def build_validation_context(
     undeclared = [path for path in decision_paths if path not in baseline and path not in allowed]
     if undeclared:
         raise ValueError(f"repair_requires_supplemental_file:{undeclared}")
-    missing = [path for path in allowed if path not in snapshot_files]
+    missing = [path for path in allowed if path not in primary_files]
     if missing:
         raise ValueError(f"supplemental_file_missing_in_snapshot:{sorted(missing)}")
     for path in decision_paths:
-        if path in allowed and path in snapshot_files:
-            baseline[path] = snapshot_files[path]
+        if path in allowed and path in primary_files:
+            baseline[path] = primary_files[path]
     return ValidationContext(
         baseline_files=baseline,
         runnable_paths=[path for path in decision_paths if path in baseline],

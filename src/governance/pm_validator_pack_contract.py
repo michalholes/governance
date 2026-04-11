@@ -18,6 +18,13 @@ GOVERNANCE_SPEC_PATH = "governance/governance.jsonl"
 SUPPORTED_AUTHORITY_SOURCES = {REPO_SPEC_PATH, GOVERNANCE_SPEC_PATH}
 
 
+def _workspace_root_file_bytes(path: Path, relpath: str):
+    file_path = path / Path(relpath)
+    if not file_path.is_file():
+        return None
+    return file_path.read_bytes()
+
+
 def _is_missing_repo_spec_error(err: str | None) -> bool:
     text = str(err or "").strip()
     return text.endswith(f":{REPO_SPEC_PATH}")
@@ -40,6 +47,10 @@ def _supplemental_governance_workflow_bytes(args):
         overlay = _iz(Path(args.repair_overlay))
         if GOVERNANCE_SPEC_PATH in overlay:
             return overlay[GOVERNANCE_SPEC_PATH]
+    if getattr(args, "workspace_root", None):
+        raw = _workspace_root_file_bytes(Path(args.workspace_root), GOVERNANCE_SPEC_PATH)
+        if raw is not None:
+            return raw
     if args.workspace_snapshot:
         snapshot = _iz(Path(args.workspace_snapshot))
         if GOVERNANCE_SPEC_PATH in snapshot:
@@ -66,6 +77,11 @@ def _supported_authority_sources(pack):
 
 def _authority_source_bytes(args, relpath):
     if not args.repair_overlay:
+        if getattr(args, "workspace_root", None):
+            raw = _workspace_root_file_bytes(Path(args.workspace_root), relpath)
+            if raw is not None:
+                return raw, None
+            return None, f"missing_source_in_workspace_root:{relpath}"
         snapshot = _iz(Path(args.workspace_snapshot))
         if relpath in snapshot:
             return snapshot[relpath], None
@@ -73,11 +89,17 @@ def _authority_source_bytes(args, relpath):
     overlay = _iz(Path(args.repair_overlay))
     if relpath in overlay:
         return overlay[relpath], None
-    if args.workspace_snapshot and relpath in set(args.supplemental_file):
-        snapshot = _iz(Path(args.workspace_snapshot))
-        if relpath in snapshot:
-            return snapshot[relpath], None
-        return None, f"supplemental_source_missing_in_snapshot:{relpath}"
+    if relpath in set(args.supplemental_file):
+        if getattr(args, "workspace_root", None):
+            raw = _workspace_root_file_bytes(Path(args.workspace_root), relpath)
+            if raw is not None:
+                return raw, None
+            return None, f"supplemental_source_missing_in_workspace_root:{relpath}"
+        if args.workspace_snapshot:
+            snapshot = _iz(Path(args.workspace_snapshot))
+            if relpath in snapshot:
+                return snapshot[relpath], None
+            return None, f"supplemental_source_missing_in_snapshot:{relpath}"
     return None, f"missing_source_for_recompute:{relpath}"
 
 
