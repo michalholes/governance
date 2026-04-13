@@ -45,7 +45,7 @@ This file governs Codex runs started from this repository root.
 - Look only in `/home/pi/patchhub/patches` for `instructions_<ISSUE>_v<N>.zip`.
 - Select the highest available `N`.
 - If no pack exists, or if the latest pack is ambiguous or unreadable, stop and report the blocker.
-- Treat `HANDOFF.md` and `constraint_pack.json` inside the selected pack as normative for scope and constraints.
+- Treat `HANDOFF.md` and `constraint_pack.json` inside the selected pack sources.
 
 ## Working set discipline
 
@@ -67,6 +67,7 @@ This file governs Codex runs started from this repository root.
 - Any scope expansion must remain minimal and must be justified by inspected evidence.
 - Build one concise local working summary from the selected issue pack and reuse it during the run instead of repeatedly rereading the full pack.
 - The local working summary is an ephemeral aid only. `HANDOFF.md` and `constraint_pack.json` remain the sole normative issue-pack sources.
+- Do not reread the full selected issue pack after the local working summary is created unless an ambiguity, blocker, overlay signal, or Amp log evidence requires reinspection of the normative source.
 
 ## Execution discipline
 
