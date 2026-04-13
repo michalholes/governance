@@ -32,12 +32,12 @@ This file governs Codex runs started from this repository root.
 ## Optimization findings
 
 - If you identify a concrete optimization that would materially reduce issue-turn count, repeated inspection, repeated Amp reruns, unnecessary patch versions, or other execution waste, you MUST report it to the user.
-- Report only material optimizations. Ignore trivial style preferences and micro-optimizations.
+- Report only material optimizations.
 - Use a short `OPTIMIZATION FINDINGS` block with:
-  - impact
-  - affected workflow step or files
-  - safety class: `instruction-only` | `runtime-only` | `requires-governance`
-  - whether it is inside or outside the current issue scope
+  - impact,
+  - affected workflow step or files,
+  - safety class: `instruction-only` | `runtime-only` | `requires-governance`,
+  - and whether it is inside or outside the current issue scope.
 - Do not implement workflow or contract changes outside the current issue scope unless the authoritative issue pack explicitly permits them.
 
 ## Issue pack lookup
