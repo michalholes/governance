@@ -9,6 +9,16 @@ This file governs Codex runs started from this repository root.
 - Keep changes single-target and inside this repository.
 - Treat `governance/governance.jsonl` and `governance/specification.jsonl` as the authority corpus. Do not create a second truth in loose helper docs.
 
+## Local terminology
+
+- `Amp` means the patch runner command `python3 scripts/am_patch.py ...` used for this workflow.
+- `PatchHub` means the runner/artifact workspace rooted at `/home/pi/patchhub`.
+- `PHB` means PatchHub.
+- `AM2` means the broader AudioMason2 project context only. It does not widen repository scope beyond the current target repo.
+- `issue pack` means the selected latest `instructions_<ISSUE>_v<N>.zip` under `/home/pi/patchhub/patches`.
+- `overlay` means the latest `patched_issue<ISSUE>_*.zip` artifact for the same issue.
+- These aliases are local execution shorthand only. Authority remains in `governance/governance.jsonl`, `governance/specification.jsonl`, and the selected issue-pack normative sources.
+
 ## Patch and Amp execution
 
 - Write patch artifacts to `/home/pi/patchhub/patches` as `issue_<ISSUE>_v<N>.zip`.
@@ -68,6 +78,7 @@ This file governs Codex runs started from this repository root.
 - Build one concise local working summary from the selected issue pack and reuse it during the run instead of repeatedly rereading the full pack.
 - The local working summary is an ephemeral aid only. `HANDOFF.md` and `constraint_pack.json` remain the sole normative issue-pack sources.
 - Do not reread the full selected issue pack after the local working summary is created unless an ambiguity, blocker, overlay signal, or Amp log evidence requires reinspection of the normative source.
+- Do not search the wider governance corpus merely to decode local execution aliases already defined in this file.
 
 ## Execution discipline
 
