@@ -1,0 +1,1 @@
+PM validator now triggers EXTERNAL_GATE:PYTEST for changed existing .py or .js files and, once triggered, runs pytest against the materialized full repository tree without narrowing the invocation to selected changed test paths.

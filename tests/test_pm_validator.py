@@ -268,9 +268,18 @@ def _snapshot_zip(path: Path, members: dict[str, bytes]) -> None:
     _write_zip(path, _with_spec(members))
 
 
+def _patch_members_with_fragment(
+    relpath: str, before: str, after: str, fragment_path: str, fragment_text: str
+) -> dict[str, bytes]:
+    return {
+        _safe_member(relpath): _git_patch(relpath, before, after),
+        _safe_member(fragment_path): _added_patch(fragment_path, fragment_text),
+    }
+
+
 def _run(instructions_zip: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(SCRIPT), *args, str(instructions_zip)],
+        [sys.executable, str(SCRIPT), *args, str(instructions_zip), "--skip-external-gates"],
         capture_output=True,
         text=True,
         check=False,
@@ -965,9 +974,9 @@ def _run_env(
     )
 
 
-def _fake_tool(directory: Path, name: str, exit_code: int) -> Path:
+def _fake_tool(directory: Path, name: str, exit_code: int, *, body: str | None = None) -> Path:
     path = directory / name
-    path.write_text(f"#!/bin/sh\nexit {exit_code}\n", encoding="utf-8")
+    path.write_text(body or f"#!/bin/sh\nexit {exit_code}\n", encoding="utf-8")
     path.chmod(0o755)
     return path
 
@@ -1009,28 +1018,26 @@ def test_missing_instructions_zip_continues_into_core_checks(tmp_path: Path) -> 
 
 
 def test_skip_external_gates_emits_cli_disabled(tmp_path: Path) -> None:
-    relpath = "scripts/sample.py"
-    before = "def value():\n    return 1\n"
-    after = "def value():\n    return 2\n"
-    snapshot = tmp_path / f"{DEFAULT_TARGET}-main_666.zip"
+    relpath = "tests/test_sample.py"
+    before = "def test_value():\n    assert 1 == 1\n"
+    after = "def test_value():\n    assert 2 == 2\n"
+    snap = tmp_path / f"{DEFAULT_TARGET}-main_666.zip"
     patch_zip = tmp_path / "issue_601_v2.zip"
-    instructions_zip = _instructions_zip(tmp_path / "instructions.zip")
-    _snapshot_zip(snapshot, {relpath: before.encode("utf-8")})
+    ins = _instructions_zip(tmp_path / "instructions.zip")
+    log_path = tmp_path / "pytest_args.txt"
+    _snapshot_zip(snap, {relpath: before.encode("utf-8")})
     _patch_zip(patch_zip, {_safe_member(relpath): _git_patch(relpath, before, after)})
-
-    proc = _run(
-        instructions_zip,
-        "601",
-        COMMIT,
-        str(patch_zip),
-        "--workspace-snapshot",
-        str(snapshot),
-        "--skip-external-gates",
+    tools = tmp_path / "tools_capture"
+    tools.mkdir()
+    body = f'#!/bin/sh\nprintf \'%s\\n\' "$@" > "{log_path}"\nexit 0\n'
+    _fake_tool(tools, "pytest", 0, body=body)
+    _fake_tool(tools, "ruff", 0)
+    _fake_tool(tools, "mypy", 0)
+    proc = _run_env(
+        ins, _git_only_env(tools), "601", COMMIT, str(patch_zip), "--workspace-snapshot", str(snap)
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "RULE EXTERNAL_GATE:RUFF: SKIP - cli_disabled" in proc.stdout
-    assert "RULE EXTERNAL_GATE:MYPY: SKIP - cli_disabled" in proc.stdout
-    assert "RESULT: PASS" in proc.stdout
+    assert log_path.read_text(encoding="utf-8").splitlines() == ["-q", "-o", "addopts="]
 
 
 def test_external_gate_pass_when_tool_succeeds(tmp_path: Path) -> None:
@@ -1064,14 +1071,16 @@ def test_external_gate_pass_when_tool_succeeds(tmp_path: Path) -> None:
 
 
 def test_external_gate_fail_causes_overall_fail(tmp_path: Path) -> None:
-    relpath = "tests/test_sample.py"
-    before = "def test_value():\n    assert 1 == 1\n"
-    after = "def test_value():\n    assert 2 == 2\n"
+    relpath = "src/sample.py"
+    fp = "docs/change_fragments/issue_601_fail.txt"
+    before = "def value():\n    return 1\n"
+    after = "def value():\n    return 2\n"
     snapshot = tmp_path / f"{DEFAULT_TARGET}-main_666.zip"
     patch_zip = tmp_path / "issue_601_v2.zip"
     instructions_zip = _instructions_zip(tmp_path / "instructions.zip")
     _snapshot_zip(snapshot, {relpath: before.encode("utf-8")})
-    _patch_zip(patch_zip, {_safe_member(relpath): _git_patch(relpath, before, after)})
+    members = _patch_members_with_fragment(relpath, before, after, fp, "issue 601 fail\n")
+    _patch_zip(patch_zip, members)
     tools = tmp_path / "tools_fail"
     tools.mkdir()
     _fake_tool(tools, "pytest", 5)
@@ -1094,14 +1103,16 @@ def test_external_gate_fail_causes_overall_fail(tmp_path: Path) -> None:
 
 
 def test_external_gate_unverified_does_not_force_fail(tmp_path: Path) -> None:
-    relpath = "scripts/sample.py"
-    before = "def value():\n    return 1\n"
-    after = "def value():\n    return 2\n"
+    relpath = "src/sample.js"
+    fragment_path = "docs/change_fragments/issue_601_js.txt"
+    before = "export const value = 1;\n"
+    after = "export const value = 2;\n"
     snapshot = tmp_path / f"{DEFAULT_TARGET}-main_666.zip"
     patch_zip = tmp_path / "issue_601_v2.zip"
     instructions_zip = _instructions_zip(tmp_path / "instructions.zip")
     _snapshot_zip(snapshot, {relpath: before.encode("utf-8")})
-    _patch_zip(patch_zip, {_safe_member(relpath): _git_patch(relpath, before, after)})
+    members = _patch_members_with_fragment(relpath, before, after, fragment_path, "issue 601 js\n")
+    _patch_zip(patch_zip, members)
     tools = tmp_path / "tools_unverified"
     tools.mkdir()
     env = _git_only_env(tools)
@@ -1116,6 +1127,14 @@ def test_external_gate_unverified_does_not_force_fail(tmp_path: Path) -> None:
         str(snapshot),
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "RULE EXTERNAL_GATE:RUFF: UNVERIFIED_ENVIRONMENT - tool_not_found:ruff" in proc.stdout
-    assert "RULE EXTERNAL_GATE:MYPY: UNVERIFIED_ENVIRONMENT - tool_not_found:mypy" in proc.stdout
+    assert "RULE EXTERNAL_GATE:PYTEST: UNVERIFIED_ENVIRONMENT" in proc.stdout
     assert "RESULT: PASS" in proc.stdout
+    no_rel = "docs/change_fragments/example.txt"
+    no_snap = tmp_path / f"{DEFAULT_TARGET}-main_667.zip"
+    no_patch = tmp_path / "issue_601_v3.zip"
+    _snapshot_zip(no_snap, {no_rel: b"before\n"})
+    _patch_zip(no_patch, {_safe_member(no_rel): _git_patch(no_rel, "before\n", "after\n")})
+    proc = _run(
+        instructions_zip, "601", COMMIT, str(no_patch), "--workspace-snapshot", str(no_snap)
+    )
+    assert "RULE EXTERNAL_GATE:PYTEST: SKIP - not_triggered" in proc.stdout

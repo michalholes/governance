@@ -134,23 +134,25 @@ def test_pm_validator_initial_mode_passes_with_workspace_root(tmp_path: Path) ->
         {base._safe_member(relpath): base._git_patch(relpath, before, after)},
     )
 
-    proc = subprocess.run(
-        [
-            sys.executable,
-            str(base.SCRIPT),
-            "601",
-            base.COMMIT,
-            str(patch_zip),
-            str(instructions_zip),
-            "--workspace-root",
-            str(workspace_root),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
+    tools = tmp_path / "tools_pass"
+    tools.mkdir()
+    base._fake_tool(tools, "pytest", 0)
+    base._fake_tool(tools, "ruff", 0)
+    base._fake_tool(tools, "mypy", 0)
+    env = base._git_only_env(tools)
+
+    proc = base._run_env(
+        instructions_zip,
+        env,
+        "601",
+        base.COMMIT,
+        str(patch_zip),
+        "--workspace-root",
+        str(workspace_root),
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert f"RULE INITIAL_TARGET_SOURCE: PASS - {base.DEFAULT_TARGET}" in proc.stdout
+    assert "RULE EXTERNAL_GATE:PYTEST: PASS - files=1" in proc.stdout
 
 
 def test_pm_validator_initial_mode_workspace_root_target_mismatch(tmp_path: Path) -> None:

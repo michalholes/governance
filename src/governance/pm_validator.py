@@ -812,17 +812,7 @@ def _triggered_existing_paths(
 
 
 def _triggered_pytest_paths(root: Path, decision_paths: list[str]) -> list[str]:
-    selected: list[str] = []
-    for relpath in decision_paths:
-        parts = PurePosixPath(relpath).parts
-        if not parts or parts[0] != "tests":
-            continue
-        if Path(relpath).suffix != ".py":
-            continue
-        if not (root / relpath).exists():
-            continue
-        selected.append(relpath)
-    return selected
+    return _triggered_existing_paths(root, decision_paths, {".py", ".js"})
 
 
 def _external_gate_result(
@@ -865,7 +855,7 @@ def _run_external_gates(
             root=root,
             relpaths=test_paths,
             command_name="pytest",
-            command_builder=lambda paths: ["-q", "-o addopts=''", *paths],
+            command_builder=lambda _paths: ["-q", "-o", "addopts="],
             cli_disabled=cli_disabled,
         ),
         _external_gate_result(
