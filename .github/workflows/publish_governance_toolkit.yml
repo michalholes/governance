@@ -1,57 +1,98 @@
-- name: Build toolkit bundle and manifest
-  shell: bash
-  run: |
-    set -euo pipefail
-    ROOT="$GITHUB_WORKSPACE"
-    OUT_DIR="$ROOT/artifacts/governance_toolkit"
-    STAGE_DIR="$(mktemp -d)"
-    TOOLKIT_ROOT="$STAGE_DIR/governance"
+name: publish-governance-toolkit
 
-    mkdir -p "$OUT_DIR"
-    mkdir -p "$TOOLKIT_ROOT"
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "src/governance/**"
+      - "governance/governance.jsonl"
+      - "governance/specification.jsonl"
+      - ".github/workflows/publish_governance_toolkit.yml"
+  workflow_dispatch:
 
-    cp "$ROOT/src/governance/pm_validator.py" "$TOOLKIT_ROOT/"
-    cp "$ROOT/src/governance/pm_validator_runtime_support.py" "$TOOLKIT_ROOT/"
-    cp "$ROOT/src/governance/pm_validator_pack_contract.py" "$TOOLKIT_ROOT/"
-    cp "$ROOT/src/governance/pm_spec_validator.py" "$TOOLKIT_ROOT/"
-    cp "$ROOT/src/governance/rc_resolver.py" "$TOOLKIT_ROOT/"
-    cp "$ROOT/src/governance/validate_master_spec_v2.py" "$TOOLKIT_ROOT/"
-    cp "$ROOT/src/governance/render_master_spec_txt.py" "$TOOLKIT_ROOT/"
-    cp "$ROOT/src/governance/workflow_effective_context.py" "$TOOLKIT_ROOT/"
-    cp "$ROOT/src/governance/gov_navigator.py" "$TOOLKIT_ROOT/"
+permissions:
+  contents: write
 
-    cp "$ROOT/governance/governance.jsonl" "$TOOLKIT_ROOT/"
-    cp "$ROOT/governance/specification.jsonl" "$TOOLKIT_ROOT/"
+jobs:
+  publish:
+    runs-on: ubuntu-latest
 
-    if [ -f "$ROOT/src/governance/__init__.py" ]; then
-      cp "$ROOT/src/governance/__init__.py" "$TOOLKIT_ROOT/"
-    fi
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    TOOLKIT_ZIP="$OUT_DIR/toolkit.zip"
-    rm -f "$TOOLKIT_ZIP"
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-    (
-      cd "$STAGE_DIR"
-      python -m zipfile -c "$TOOLKIT_ZIP" governance/*
-    )
+      - name: Build toolkit bundle and manifest
+        shell: bash
+        run: |
+          set -euo pipefail
 
-    ARCHIVE_SHA256="$(python -c 'from pathlib import Path; import hashlib; p = Path("artifacts/governance_toolkit/toolkit.zip"); print(hashlib.sha256(p.read_bytes()).hexdigest())')"
+          ROOT="$GITHUB_WORKSPACE"
+          OUT_DIR="$ROOT/artifacts/governance_toolkit"
+          STAGE_DIR="$(mktemp -d)"
+          TOOLKIT_ROOT="$STAGE_DIR/governance"
 
-    REMOTE_SIG="sha-${GITHUB_SHA}"
-    MANIFEST_PATH="$OUT_DIR/manifest.json"
-    ARCHIVE_URL="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/artifacts/governance_toolkit/toolkit.zip"
+          mkdir -p "$OUT_DIR"
+          mkdir -p "$TOOLKIT_ROOT"
 
-    python - <<PY
-    from pathlib import Path
-    import json
+          cp "$ROOT/src/governance/pm_validator.py" "$TOOLKIT_ROOT/"
+          cp "$ROOT/src/governance/pm_validator_runtime_support.py" "$TOOLKIT_ROOT/"
+          cp "$ROOT/src/governance/pm_validator_pack_contract.py" "$TOOLKIT_ROOT/"
+          cp "$ROOT/src/governance/pm_spec_validator.py" "$TOOLKIT_ROOT/"
+          cp "$ROOT/src/governance/rc_resolver.py" "$TOOLKIT_ROOT/"
+          cp "$ROOT/src/governance/validate_master_spec_v2.py" "$TOOLKIT_ROOT/"
+          cp "$ROOT/src/governance/render_master_spec_txt.py" "$TOOLKIT_ROOT/"
+          cp "$ROOT/src/governance/workflow_effective_context.py" "$TOOLKIT_ROOT/"
+          cp "$ROOT/src/governance/gov_navigator.py" "$TOOLKIT_ROOT/"
 
-    manifest = {
-        "remote_sig": "${REMOTE_SIG}",
-        "archive_url": "${ARCHIVE_URL}",
-        "archive_sha256": "${ARCHIVE_SHA256}",
-    }
-    Path("${MANIFEST_PATH}").write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=True) + "\n",
-        encoding="utf-8",
-    )
-    PY
+          cp "$ROOT/governance/governance.jsonl" "$TOOLKIT_ROOT/"
+          cp "$ROOT/governance/specification.jsonl" "$TOOLKIT_ROOT/"
+
+          if [ -f "$ROOT/src/governance/__init__.py" ]; then
+            cp "$ROOT/src/governance/__init__.py" "$TOOLKIT_ROOT/"
+          fi
+
+          TOOLKIT_ZIP="$OUT_DIR/toolkit.zip"
+          rm -f "$TOOLKIT_ZIP"
+
+          (
+            cd "$STAGE_DIR"
+            python -m zipfile -c "$TOOLKIT_ZIP" governance/*
+          )
+
+          ARCHIVE_SHA256="$(python -c 'from pathlib import Path; import hashlib; p = Path("artifacts/governance_toolkit/toolkit.zip"); print(hashlib.sha256(p.read_bytes()).hexdigest())')"
+
+          REMOTE_SIG="sha-${GITHUB_SHA}"
+          MANIFEST_PATH="$OUT_DIR/manifest.json"
+          ARCHIVE_URL="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/artifacts/governance_toolkit/toolkit.zip"
+
+          REMOTE_SIG="$REMOTE_SIG" \
+          ARCHIVE_URL="$ARCHIVE_URL" \
+          ARCHIVE_SHA256="$ARCHIVE_SHA256" \
+          MANIFEST_PATH="$MANIFEST_PATH" \
+          python -c 'from pathlib import Path; import json, os; manifest = {"remote_sig": os.environ["REMOTE_SIG"], "archive_url": os.environ["ARCHIVE_URL"], "archive_sha256": os.environ["ARCHIVE_SHA256"]}; Path(os.environ["MANIFEST_PATH"]).write_text(json.dumps(manifest, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")'
+
+      - name: Commit published artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add artifacts/governance_toolkit/toolkit.zip artifacts/governance_toolkit/manifest.json
+
+          if git diff --cached --quiet; then
+            echo "No artifact changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Publish governance toolkit artifacts"
+          git push
