@@ -8,7 +8,16 @@ from collections import defaultdict
 from collections.abc import Callable
 from importlib import import_module
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import TYPE_CHECKING, Any, TypeAlias, TypedDict, cast
+
+if TYPE_CHECKING:
+    from .type_aliases import JsonDict, JsonList
+else:
+    try:
+        from .type_aliases import JsonDict, JsonList
+    except ImportError:
+        JsonDict: TypeAlias = dict[str, Any]
+        JsonList: TypeAlias = list[JsonDict]
 
 SEPARATOR = "-" * 80
 
@@ -20,7 +29,16 @@ class WorkflowEffectiveContext(TypedDict):
     effective_full_rule_text: dict[str, str]
 
 
-WorkflowEffectiveContextFn = Callable[[list[dict], str], WorkflowEffectiveContext]
+WorkflowEffectiveContextFn = Callable[[JsonList, str], WorkflowEffectiveContext]
+
+
+class WorkflowIndex(TypedDict):
+    steps: dict[str, JsonDict]
+    next_steps: dict[str, list[str]]
+    gates_by_step: dict[str, JsonList]
+    invalidations_by_step: dict[str, list[str]]
+    rollbacks_by_step: dict[str, list[str]]
+    roots: list[str]
 
 
 def _load_build_workflow_effective_context() -> WorkflowEffectiveContextFn:
@@ -41,8 +59,8 @@ def _load_build_workflow_effective_context() -> WorkflowEffectiveContextFn:
 build_workflow_effective_context = _load_build_workflow_effective_context()
 
 
-def load_jsonl(path: Path) -> list[dict]:
-    objs: list[dict] = []
+def load_jsonl(path: Path) -> JsonList:
+    objs: JsonList = []
     with path.open("r", encoding="utf-8") as handle:
         for line in handle:
             line = line.strip()
@@ -51,9 +69,9 @@ def load_jsonl(path: Path) -> list[dict]:
     return objs
 
 
-def index_by_type(objs: list[dict]) -> tuple[dict | None, dict[str, list[dict]]]:
-    meta = None
-    groups: dict[str, list[dict]] = {}
+def index_by_type(objs: JsonList) -> tuple[JsonDict | None, dict[str, JsonList]]:
+    meta: JsonDict | None = None
+    groups: dict[str, JsonList] = {}
     for obj in objs:
         obj_type = str(obj.get("type", ""))
         if obj_type == "meta":
@@ -80,7 +98,7 @@ def _fmt_list(values: list[str], *, empty: str = "-", limit: int | None = None) 
     return ", ".join(unique)
 
 
-def _heading_root(section: dict) -> str:
+def _heading_root(section: JsonDict) -> str:
     heading = str(section.get("heading_path", "")).strip()
     if not heading:
         return "<no heading_path>"
@@ -99,7 +117,7 @@ def _id_list(values: object) -> list[str]:
 
 
 def _rule_ids_from_capabilities(
-    capability_ids: list[str], capabilities: dict[str, dict]
+    capability_ids: list[str], capabilities: dict[str, JsonDict]
 ) -> list[str]:
     rule_ids: list[str] = []
     seen: set[str] = set()
@@ -113,14 +131,14 @@ def _rule_ids_from_capabilities(
     return rule_ids
 
 
-def _rule_text_by_ids(rule_ids: list[str], rules: dict[str, dict]) -> list[str]:
+def _rule_text_by_ids(rule_ids: list[str], rules: dict[str, JsonDict]) -> list[str]:
     return [str(rules[rule_id].get("statement", "")) for rule_id in rule_ids]
 
 
 def _append_rule_text_block(
     out: list[str],
     rule_ids: list[str],
-    rules: dict[str, dict],
+    rules: dict[str, JsonDict],
     *,
     show_rule_ids: bool = True,
 ) -> None:
@@ -135,7 +153,7 @@ def _append_rule_text_block(
         out.append(f"    - {statement}")
 
 
-def _entry_gate_rule_ids(gates: list[dict], capabilities: dict[str, dict]) -> list[str]:
+def _entry_gate_rule_ids(gates: JsonList, capabilities: dict[str, JsonDict]) -> list[str]:
     rule_ids: list[str] = []
     seen: set[str] = set()
     for gate in gates:
@@ -156,14 +174,14 @@ def _entry_gate_rule_ids(gates: list[dict], capabilities: dict[str, dict]) -> li
     return rule_ids
 
 
-def _build_workflow_index(groups: dict[str, list[dict]]) -> dict[str, object]:
+def _build_workflow_index(groups: dict[str, JsonList]) -> WorkflowIndex:
     steps = {str(obj.get("id", "")): obj for obj in groups.get("workflow_step", [])}
     transitions = groups.get("workflow_transition", [])
     gates = groups.get("workflow_gate", [])
     invalidations = groups.get("workflow_invalidation", [])
     rollbacks = groups.get("workflow_rollback", [])
     next_steps: dict[str, list[str]] = defaultdict(list)
-    gates_by_step: dict[str, list[dict]] = defaultdict(list)
+    gates_by_step: dict[str, JsonList] = defaultdict(list)
     invalidations_by_step: dict[str, list[str]] = defaultdict(list)
     rollbacks_by_step: dict[str, list[str]] = defaultdict(list)
     roots: list[str] = []
@@ -199,7 +217,7 @@ def _build_workflow_index(groups: dict[str, list[dict]]) -> dict[str, object]:
     }
 
 
-def _append_graph_summary(out: list[str], groups: dict[str, list[dict]]) -> None:
+def _append_graph_summary(out: list[str], groups: dict[str, JsonList]) -> None:
     _append_header(out, "GRAPH SUMMARY")
     out.append(f"surfaces: {len(groups.get('surface', []))}")
     out.append(f"routes: {len(groups.get('route', []))}")
@@ -214,7 +232,7 @@ def _append_graph_summary(out: list[str], groups: dict[str, list[dict]]) -> None
     out.append("")
 
 
-def _append_surface_navigation(out: list[str], groups: dict[str, list[dict]]) -> None:
+def _append_surface_navigation(out: list[str], groups: dict[str, JsonList]) -> None:
     surfaces = {str(obj.get("id", "")): obj for obj in groups.get("surface", [])}
     routes = {str(obj.get("id", "")): obj for obj in groups.get("route", [])}
     providers = {str(obj.get("id", "")): obj for obj in groups.get("provider", [])}
@@ -249,7 +267,7 @@ def _append_surface_navigation(out: list[str], groups: dict[str, list[dict]]) ->
         out.append("")
 
 
-def _append_route_navigation(out: list[str], groups: dict[str, list[dict]]) -> None:
+def _append_route_navigation(out: list[str], groups: dict[str, JsonList]) -> None:
     routes = {str(obj.get("id", "")): obj for obj in groups.get("route", [])}
     capabilities = {str(obj.get("id", "")): obj for obj in groups.get("capability", [])}
     rules = {str(obj.get("id", "")): obj for obj in groups.get("rule", [])}
@@ -274,7 +292,7 @@ def _append_route_navigation(out: list[str], groups: dict[str, list[dict]]) -> N
         out.append("")
 
 
-def _append_capability_navigation(out: list[str], groups: dict[str, list[dict]]) -> None:
+def _append_capability_navigation(out: list[str], groups: dict[str, JsonList]) -> None:
     caps = {str(obj.get("id", "")): obj for obj in groups.get("capability", [])}
     rules = {str(obj.get("id", "")): obj for obj in groups.get("rule", [])}
     providers = groups.get("provider", [])
@@ -302,7 +320,7 @@ def _append_capability_navigation(out: list[str], groups: dict[str, list[dict]])
         out.append("")
 
 
-def _append_implementation_navigation(out: list[str], groups: dict[str, list[dict]]) -> None:
+def _append_implementation_navigation(out: list[str], groups: dict[str, JsonList]) -> None:
     implementations = {str(obj.get("id", "")): obj for obj in groups.get("implementation", [])}
     capabilities = {str(obj.get("id", "")): obj for obj in groups.get("capability", [])}
     rules = {str(obj.get("id", "")): obj for obj in groups.get("rule", [])}
@@ -321,9 +339,9 @@ def _append_implementation_navigation(out: list[str], groups: dict[str, list[dic
         out.append("")
 
 
-def _append_workflow_roots(out: list[str], workflow: dict[str, object], objs: list[dict]) -> None:
-    steps: dict[str, dict] = workflow["steps"]  # type: ignore[assignment]
-    roots: list[str] = workflow["roots"]  # type: ignore[assignment]
+def _append_workflow_roots(out: list[str], workflow: WorkflowIndex, objs: JsonList) -> None:
+    steps = workflow["steps"]
+    roots = workflow["roots"]
     rules = {str(obj.get("id", "")): obj for obj in index_by_type(objs)[1].get("rule", [])}
     _append_header(out, "WORKFLOW ROOTS")
     for step_id in roots:
@@ -341,9 +359,9 @@ def _append_workflow_roots(out: list[str], workflow: dict[str, object], objs: li
         out.append("")
 
 
-def _append_step_order(out: list[str], workflow: dict[str, object]) -> None:
-    steps: dict[str, dict] = workflow["steps"]  # type: ignore[assignment]
-    next_steps: dict[str, list[str]] = workflow["next_steps"]  # type: ignore[assignment]
+def _append_step_order(out: list[str], workflow: WorkflowIndex) -> None:
+    steps = workflow["steps"]
+    next_steps = workflow["next_steps"]
     by_branch: dict[str, list[str]] = defaultdict(list)
     for step_id, step in steps.items():
         by_branch[str(step.get("branch", ""))].append(step_id)
@@ -367,10 +385,10 @@ def _append_step_order(out: list[str], workflow: dict[str, object]) -> None:
 
 
 def _append_entry_gates(
-    out: list[str], workflow: dict[str, object], groups: dict[str, list[dict]]
+    out: list[str], workflow: WorkflowIndex, groups: dict[str, JsonList]
 ) -> None:
-    steps: dict[str, dict] = workflow["steps"]  # type: ignore[assignment]
-    gates_by_step: dict[str, list[dict]] = workflow["gates_by_step"]  # type: ignore[assignment]
+    steps = workflow["steps"]
+    gates_by_step = workflow["gates_by_step"]
     capabilities = {str(obj.get("id", "")): obj for obj in groups.get("capability", [])}
     rules = {str(obj.get("id", "")): obj for obj in groups.get("rule", [])}
     _append_header(out, "ENTRY GATES")
@@ -395,16 +413,16 @@ def _append_entry_gates(
         out.append("")
 
 
-def _append_invalidation_map(out: list[str], workflow: dict[str, object]) -> None:
-    invalidations_by_step: dict[str, list[str]] = workflow["invalidations_by_step"]  # type: ignore[assignment]
+def _append_invalidation_map(out: list[str], workflow: WorkflowIndex) -> None:
+    invalidations_by_step = workflow["invalidations_by_step"]
     _append_header(out, "INVALIDATION MAP")
     for step_id in sorted(invalidations_by_step):
         out.append(f"[{step_id}] -> {_fmt_list(invalidations_by_step[step_id])}")
     out.append("")
 
 
-def _append_rollback_map(out: list[str], workflow: dict[str, object]) -> None:
-    rollbacks_by_step: dict[str, list[str]] = workflow["rollbacks_by_step"]  # type: ignore[assignment]
+def _append_rollback_map(out: list[str], workflow: WorkflowIndex) -> None:
+    rollbacks_by_step = workflow["rollbacks_by_step"]
     _append_header(out, "ROLLBACK MAP")
     for step_id in sorted(rollbacks_by_step):
         out.append(f"[{step_id}] -> {_fmt_list(rollbacks_by_step[step_id])}")
@@ -412,9 +430,9 @@ def _append_rollback_map(out: list[str], workflow: dict[str, object]) -> None:
 
 
 def _append_effective_prestart_steps(
-    out: list[str], workflow: dict[str, object], objs: list[dict]
+    out: list[str], workflow: WorkflowIndex, objs: JsonList
 ) -> None:
-    roots: list[str] = workflow["roots"]  # type: ignore[assignment]
+    roots = workflow["roots"]
     _append_header(out, "EFFECTIVE PRESTART STEPS")
     for step_id in roots:
         ctx = build_workflow_effective_context(objs, step_id)
@@ -424,9 +442,9 @@ def _append_effective_prestart_steps(
 
 
 def _append_effective_prestart_capabilities(
-    out: list[str], workflow: dict[str, object], objs: list[dict]
+    out: list[str], workflow: WorkflowIndex, objs: JsonList
 ) -> None:
-    roots: list[str] = workflow["roots"]  # type: ignore[assignment]
+    roots = workflow["roots"]
     _append_header(out, "EFFECTIVE PRESTART CAPABILITIES")
     for step_id in roots:
         ctx = build_workflow_effective_context(objs, step_id)
@@ -436,9 +454,9 @@ def _append_effective_prestart_capabilities(
 
 
 def _append_effective_prestart_rules(
-    out: list[str], workflow: dict[str, object], objs: list[dict]
+    out: list[str], workflow: WorkflowIndex, objs: JsonList
 ) -> None:
-    roots: list[str] = workflow["roots"]  # type: ignore[assignment]
+    roots = workflow["roots"]
     rules = {str(obj.get("id", "")): obj for obj in index_by_type(objs)[1].get("rule", [])}
     _append_header(out, "EFFECTIVE PRESTART RULES")
     for step_id in roots:
@@ -455,12 +473,12 @@ def _append_effective_prestart_rules(
 
 
 def _append_workflow_step_details(
-    out: list[str], workflow: dict[str, object], groups: dict[str, list[dict]]
+    out: list[str], workflow: WorkflowIndex, groups: dict[str, JsonList]
 ) -> None:
-    steps: dict[str, dict] = workflow["steps"]  # type: ignore[assignment]
-    next_steps: dict[str, list[str]] = workflow["next_steps"]  # type: ignore[assignment]
-    invalidations_by_step: dict[str, list[str]] = workflow["invalidations_by_step"]  # type: ignore[assignment]
-    rollbacks_by_step: dict[str, list[str]] = workflow["rollbacks_by_step"]  # type: ignore[assignment]
+    steps = workflow["steps"]
+    next_steps = workflow["next_steps"]
+    invalidations_by_step = workflow["invalidations_by_step"]
+    rollbacks_by_step = workflow["rollbacks_by_step"]
     capabilities = {str(obj.get("id", "")): obj for obj in groups.get("capability", [])}
     rules = {str(obj.get("id", "")): obj for obj in groups.get("rule", [])}
     _append_header(out, "WORKFLOW STEP DETAILS")
@@ -486,7 +504,7 @@ def _append_workflow_step_details(
         out.append("")
 
 
-def _append_legacy_navigation(out: list[str], groups: dict[str, list[dict]]) -> None:
+def _append_legacy_navigation(out: list[str], groups: dict[str, JsonList]) -> None:
     sections = groups.get("section", [])
     rules = groups.get("rule", [])
     roots: dict[str, int] = defaultdict(int)
@@ -503,7 +521,7 @@ def _append_legacy_navigation(out: list[str], groups: dict[str, list[dict]]) -> 
     out.append("")
 
 
-def build_navigation_lines(objs: list[dict]) -> list[str]:
+def build_navigation_lines(objs: JsonList) -> list[str]:
     _meta, groups = index_by_type(objs)
     graph_counts = [
         len(groups.get("surface", [])),
@@ -535,16 +553,16 @@ def build_navigation_lines(objs: list[dict]) -> list[str]:
     return out
 
 
-def build_navigation_json(objs: list[dict]) -> dict:
+def build_navigation_json(objs: JsonList) -> JsonDict:
     _meta, groups = index_by_type(objs)
     workflow = _build_workflow_index(groups)
-    steps: dict[str, dict] = workflow["steps"]  # type: ignore[assignment]
-    next_steps: dict[str, list[str]] = workflow["next_steps"]  # type: ignore[assignment]
-    invalidations_by_step: dict[str, list[str]] = workflow["invalidations_by_step"]  # type: ignore[assignment]
-    rollbacks_by_step: dict[str, list[str]] = workflow["rollbacks_by_step"]  # type: ignore[assignment]
+    steps = workflow["steps"]
+    next_steps = workflow["next_steps"]
+    invalidations_by_step = workflow["invalidations_by_step"]
+    rollbacks_by_step = workflow["rollbacks_by_step"]
     capabilities = {str(obj.get("id", "")): obj for obj in groups.get("capability", [])}
     rules = {str(obj.get("id", "")): obj for obj in groups.get("rule", [])}
-    step_payload: dict[str, dict] = {}
+    step_payload: dict[str, JsonDict] = {}
     for step_id, step in sorted(steps.items()):
         required_rule_ids = _rule_ids_from_capabilities(
             _id_list(step.get("required_capabilities", [])),
@@ -565,7 +583,7 @@ def build_navigation_json(objs: list[dict]) -> dict:
             "required_rule_ids": required_rule_ids,
             "required_full_rule_text": _rule_text_by_ids(required_rule_ids, rules),
         }
-    roots: list[str] = workflow["roots"]  # type: ignore[assignment]
+    roots = workflow["roots"]
     payload = {
         "graph_counts": {
             "surfaces": len(groups.get("surface", [])),
@@ -579,7 +597,7 @@ def build_navigation_json(objs: list[dict]) -> dict:
         "steps": step_payload,
     }
     if steps:
-        root_details: dict[str, dict] = {}
+        root_details: dict[str, JsonDict] = {}
         for step_id in roots:
             ctx = build_workflow_effective_context(objs, step_id)
             root_details[step_id] = {

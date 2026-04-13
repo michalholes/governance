@@ -4,10 +4,19 @@ from collections import Counter
 from collections.abc import Callable
 from importlib import import_module
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
+
+if TYPE_CHECKING:
+    from .type_aliases import JsonDict, JsonList
+else:
+    try:
+        from .type_aliases import JsonDict, JsonList
+    except ImportError:
+        JsonDict: TypeAlias = dict[str, Any]
+        JsonList: TypeAlias = list[JsonDict]
 
 
-def _load_build_navigation_lines() -> Callable[[list[dict]], list[str]]:
+def _load_build_navigation_lines() -> Callable[[JsonList], list[str]]:
     for module_name in ("governance.gov_navigator", "gov_navigator"):
         try:
             module = import_module(module_name)
@@ -15,12 +24,12 @@ def _load_build_navigation_lines() -> Callable[[list[dict]], list[str]]:
             continue
         func = getattr(module, "build_navigation_lines", None)
         if callable(func):
-            return cast(Callable[[list[dict]], list[str]], func)
+            return cast(Callable[[JsonList], list[str]], func)
     raise ModuleNotFoundError("build_navigation_lines")
 
 
-def load_jsonl(path: Path) -> list[dict]:
-    objs: list[dict] = []
+def load_jsonl(path: Path) -> JsonList:
+    objs: JsonList = []
     with path.open("r", encoding="utf-8") as handle:
         for line in handle:
             line = line.strip()
@@ -29,9 +38,9 @@ def load_jsonl(path: Path) -> list[dict]:
     return objs
 
 
-def index_by_type(objs: list[dict]) -> tuple[dict | None, dict[str, list[dict]]]:
-    meta = None
-    groups: dict[str, list[dict]] = {}
+def index_by_type(objs: JsonList) -> tuple[JsonDict | None, dict[str, JsonList]]:
+    meta: JsonDict | None = None
+    groups: dict[str, JsonList] = {}
     for obj in objs:
         obj_type = str(obj.get("type", ""))
         if obj_type == "meta":
@@ -41,7 +50,7 @@ def index_by_type(objs: list[dict]) -> tuple[dict | None, dict[str, list[dict]]]
     return meta, groups
 
 
-def fmt_source(obj: dict) -> str:
+def fmt_source(obj: JsonDict) -> str:
     source_span = obj.get("source_span")
     if isinstance(source_span, dict):
         file_name = source_span.get("file", "?")
@@ -60,7 +69,7 @@ def fmt_source(obj: dict) -> str:
     return ""
 
 
-def append_meta(out: list[str], meta: dict | None) -> None:
+def append_meta(out: list[str], meta: JsonDict | None) -> None:
     if meta is None:
         return
     out.append("META")
@@ -72,7 +81,7 @@ def append_meta(out: list[str], meta: dict | None) -> None:
     out.append("")
 
 
-def append_counts(out: list[str], groups: dict[str, list[dict]]) -> None:
+def append_counts(out: list[str], groups: dict[str, JsonList]) -> None:
     out.append("OBJECT COUNTS")
     out.append("-" * 80)
     counts = Counter({name: len(items) for name, items in groups.items()})
@@ -81,7 +90,7 @@ def append_counts(out: list[str], groups: dict[str, list[dict]]) -> None:
     out.append("")
 
 
-def append_bindings(out: list[str], groups: dict[str, list[dict]]) -> None:
+def append_bindings(out: list[str], groups: dict[str, JsonList]) -> None:
     bindings = groups.get("obligation_binding", [])
     oracles = {obj.get("id", ""): obj for obj in groups.get("oracle", [])}
     out.append("AUTHORITY BINDINGS")
@@ -116,7 +125,7 @@ def append_bindings(out: list[str], groups: dict[str, list[dict]]) -> None:
             out.append("")
 
 
-def append_rules(out: list[str], groups: dict[str, list[dict]]) -> None:
+def append_rules(out: list[str], groups: dict[str, JsonList]) -> None:
     rules = {str(rule.get("id", "")): rule for rule in groups.get("rule", [])}
     out.append("RULES")
     out.append("-" * 80)
@@ -138,7 +147,7 @@ def append_rules(out: list[str], groups: dict[str, list[dict]]) -> None:
         out.append("")
 
 
-def append_sections_and_notes(out: list[str], groups: dict[str, list[dict]]) -> None:
+def append_sections_and_notes(out: list[str], groups: dict[str, JsonList]) -> None:
     sections = groups.get("section", [])
     notes = groups.get("note", [])
     source_meta = groups.get("source_meta", [])

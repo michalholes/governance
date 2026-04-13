@@ -1,7 +1,16 @@
 from __future__ import annotations
 
 # Canonical workflow-effective traversal authority for governance tooling.
-from typing import TypedDict
+from typing import TYPE_CHECKING, Any, TypeAlias, TypedDict
+
+if TYPE_CHECKING:
+    from .type_aliases import JsonDict, JsonList
+else:
+    try:
+        from .type_aliases import JsonDict, JsonList
+    except ImportError:
+        JsonDict: TypeAlias = dict[str, Any]
+        JsonList: TypeAlias = list[JsonDict]
 
 
 class WorkflowEffectiveContextError(Exception):
@@ -15,8 +24,8 @@ class WorkflowEffectiveContext(TypedDict):
     effective_full_rule_text: dict[str, str]
 
 
-def _object_map(objects: list[dict], kind: str) -> dict[str, dict]:
-    out: dict[str, dict] = {}
+def _object_map(objects: JsonList, kind: str) -> dict[str, JsonDict]:
+    out: dict[str, JsonDict] = {}
     for obj in objects:
         if obj.get("type") != kind:
             continue
@@ -38,7 +47,7 @@ def _id_list(values: object) -> list[str]:
 
 
 def build_workflow_effective_context(
-    objects: list[dict],
+    objects: JsonList,
     entry_step_id: str,
 ) -> WorkflowEffectiveContext:
     steps = _object_map(objects, "workflow_step")

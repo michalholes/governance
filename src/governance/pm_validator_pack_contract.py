@@ -4,9 +4,18 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 import __main__ as _m
+
+if TYPE_CHECKING:
+    from .type_aliases import JsonDict, JsonList
+else:
+    try:
+        from .type_aliases import JsonDict, JsonList
+    except ImportError:
+        JsonDict: TypeAlias = dict[str, Any]
+        JsonList: TypeAlias = list[JsonDict]
 
 R = _m.RuleResult
 VE = _m.ValidationError
@@ -17,8 +26,13 @@ REPO_SPEC_PATH = "governance/specification.jsonl"
 GOVERNANCE_SPEC_PATH = "governance/governance.jsonl"
 SUPPORTED_AUTHORITY_SOURCES = {REPO_SPEC_PATH, GOVERNANCE_SPEC_PATH}
 
+if TYPE_CHECKING:
+    from argparse import Namespace
 
-def _workspace_root_file_bytes(path: Path, relpath: str):
+    from .pm_validator import RuleResult
+
+
+def _workspace_root_file_bytes(path: Path, relpath: str) -> bytes | None:
     file_path = path / Path(relpath)
     if not file_path.is_file():
         return None
@@ -42,9 +56,9 @@ else:
     )
 
 
-def _supplemental_governance_workflow_bytes(args):
+def _supplemental_governance_workflow_bytes(args: Namespace) -> bytes:
     if args.repair_overlay:
-        overlay = _iz(Path(args.repair_overlay))
+        overlay = cast(dict[str, bytes], _iz(Path(args.repair_overlay)))
         if GOVERNANCE_SPEC_PATH in overlay:
             return overlay[GOVERNANCE_SPEC_PATH]
     if getattr(args, "workspace_root", None):
@@ -52,13 +66,13 @@ def _supplemental_governance_workflow_bytes(args):
         if raw is not None:
             return raw
     if args.workspace_snapshot:
-        snapshot = _iz(Path(args.workspace_snapshot))
+        snapshot = cast(dict[str, bytes], _iz(Path(args.workspace_snapshot)))
         if GOVERNANCE_SPEC_PATH in snapshot:
             return snapshot[GOVERNANCE_SPEC_PATH]
     raise VE("missing_governance_workflow_source")
 
 
-def _supported_authority_sources(pack):
+def _supported_authority_sources(pack: JsonDict) -> list[str]:
     sources = pack.get("authoritative_sources", [])
     if not isinstance(sources, list) or not sources:
         raise VE("pack_authoritative_sources_missing")
@@ -75,18 +89,18 @@ def _supported_authority_sources(pack):
     return out
 
 
-def _authority_source_bytes(args, relpath):
+def _authority_source_bytes(args: Namespace, relpath: str) -> tuple[bytes | None, str | None]:
     if not args.repair_overlay:
         if getattr(args, "workspace_root", None):
             raw = _workspace_root_file_bytes(Path(args.workspace_root), relpath)
             if raw is not None:
                 return raw, None
             return None, f"missing_source_in_workspace_root:{relpath}"
-        snapshot = _iz(Path(args.workspace_snapshot))
+        snapshot = cast(dict[str, bytes], _iz(Path(args.workspace_snapshot)))
         if relpath in snapshot:
             return snapshot[relpath], None
         return None, f"missing_source_in_workspace_snapshot:{relpath}"
-    overlay = _iz(Path(args.repair_overlay))
+    overlay = cast(dict[str, bytes], _iz(Path(args.repair_overlay)))
     if relpath in overlay:
         return overlay[relpath], None
     if relpath in set(args.supplemental_file):
@@ -96,7 +110,7 @@ def _authority_source_bytes(args, relpath):
                 return raw, None
             return None, f"supplemental_source_missing_in_workspace_root:{relpath}"
         if args.workspace_snapshot:
-            snapshot = _iz(Path(args.workspace_snapshot))
+            snapshot = cast(dict[str, bytes], _iz(Path(args.workspace_snapshot)))
             if relpath in snapshot:
                 return snapshot[relpath], None
             return None, f"supplemental_source_missing_in_snapshot:{relpath}"
@@ -124,18 +138,18 @@ BINDING_REQUIRED_FIELDS = (
 )
 
 
-def _rr(i, s, d):
-    return R(i, s, d)
+def _rr(i: str, s: str, d: str) -> RuleResult:
+    return cast("RuleResult", R(i, s, d))
 
 
-def _decode_utf8_text(raw):
+def _decode_utf8_text(raw: bytes) -> str | None:
     try:
         return raw.decode("utf-8")
     except UnicodeDecodeError:
         return None
 
 
-def _normalize_single_ascii_line(raw):
+def _normalize_single_ascii_line(raw: bytes) -> tuple[str | None, str | None]:
     text = _dar(raw)
     if text is None:
         return None, "non_ascii"
@@ -147,15 +161,17 @@ def _normalize_single_ascii_line(raw):
     return (None, "must_be_non_empty") if value == "" else (value, None)
 
 
-def _su(bindings, field):
+def _su(bindings: JsonList, field: str) -> list[Any]:
     return sorted({i for b in bindings for i in b.get(field, [])})
 
 
-def _bm(bindings, key, value):
-    return {binding[key]: binding[value] for binding in bindings}
+def _bm(bindings: JsonList, key: str, value: str) -> dict[str, Any]:
+    return {str(binding[key]): binding[value] for binding in bindings}
 
 
-def _read_instructions_zip(path):
+def _read_instructions_zip(
+    path: str | Path | None,
+) -> tuple[list[RuleResult], JsonDict | None, bytes | None, str | None]:
     if path is None or not Path(path).is_file():
         out = [
             _rr("INSTRUCTIONS_EXTENSION", "FAIL", "instructions_zip_not_found"),
@@ -233,7 +249,7 @@ def _read_instructions_zip(path):
     return out, pack, pack_raw, hv
 
 
-def _load_jsonl_bytes(raw):
+def _load_jsonl_bytes(raw: bytes) -> JsonList:
     text = _decode_utf8_text(raw)
     if text is None:
         raise VE("spec_not_utf8")
@@ -251,9 +267,12 @@ def _load_jsonl_bytes(raw):
     return out
 
 
-def _collect_binding_meta_and_bindings(objects):
-    meta = None
-    bindings, oracles = [], {}
+def _collect_binding_meta_and_bindings(
+    objects: JsonList,
+) -> tuple[JsonDict, JsonList, dict[str, JsonDict]]:
+    meta: JsonDict | None = None
+    bindings: JsonList = []
+    oracles: dict[str, JsonDict] = {}
     for obj in objects:
         kind = obj.get("type")
         if kind == "binding_meta":
@@ -291,14 +310,14 @@ def _collect_binding_meta_and_bindings(objects):
     return meta, bindings, oracles
 
 
-def _binding_is_active(binding, mode, target_scope):
+def _binding_is_active(binding: JsonDict, mode: str, target_scope: str) -> bool:
     match = binding.get("match", {})
     return binding.get("binding_type") == "constraint_pack" or (
         match.get("phase") == mode and match.get("target") == target_scope
     )
 
 
-def _ensure_binding_consistency(active_bindings, oracles):
+def _ensure_binding_consistency(active_bindings: JsonList, oracles: dict[str, JsonDict]) -> None:
     if not active_bindings:
         raise VE("binding_active_missing")
     symbols: dict[tuple[str, str], list[str]] = {}
@@ -330,7 +349,7 @@ def _ensure_binding_consistency(active_bindings, oracles):
             raise VE(f"binding_conflicting_obligations:{role}")
 
 
-def _resolve_workflow_contract(objects, target_scope, mode):
+def _resolve_workflow_contract(objects: JsonList, target_scope: str, mode: str) -> JsonDict:
     steps = [obj for obj in objects if obj.get("type") == "workflow_step"]
     transitions = [obj for obj in objects if obj.get("type") == "workflow_transition"]
     gates = [obj for obj in objects if obj.get("type") == "workflow_gate"]
@@ -390,12 +409,12 @@ def _resolve_workflow_contract(objects, target_scope, mode):
 
 
 def _build_pack_from_spec_bytes(
-    spec_raw,
-    mode,
-    target_scope,
-    source_path,
-    governance_workflow_raw=None,
-):
+    spec_raw: bytes,
+    mode: str,
+    target_scope: str,
+    source_path: str,
+    governance_workflow_raw: bytes | None = None,
+) -> tuple[bytes, str, JsonList]:
     objs = _load_jsonl_bytes(spec_raw)
     if not objs or objs[0].get("type") != "meta":
         raise VE("spec_meta_missing")
@@ -452,7 +471,9 @@ def _build_pack_from_spec_bytes(
     return raw, hashlib.sha256(raw).hexdigest(), active
 
 
-def _authority_spec_bytes(args, pack):
+def _authority_spec_bytes(
+    args: Namespace, pack: JsonDict
+) -> tuple[bytes | None, str | None, str | None]:
     try:
         sources = _supported_authority_sources(pack)
     except VE as exc:
@@ -462,12 +483,14 @@ def _authority_spec_bytes(args, pack):
     return spec_raw, err, source_path
 
 
-def _pack_union_rule(rule_id, pack, key, active_bindings, field):
+def _pack_union_rule(
+    rule_id: str, pack: JsonDict, key: str, active_bindings: JsonList, field: str
+) -> RuleResult:
     exp, act = _su(active_bindings, field), sorted(pack.get(key, []))
     return _rr(rule_id, "PASS" if act == exp else "FAIL", f"expected={exp}:actual={act}")
 
 
-def _scope_mapping_rule(decision_paths, pack):
+def _scope_mapping_rule(decision_paths: list[str], pack: JsonDict) -> RuleResult:
     scope = str(pack.get("target_scope", ""))
     if not decision_paths:
         return _rr("PACK_SCOPE_MAPPING", "FAIL", "no_patch_paths")
@@ -488,7 +511,9 @@ def _scope_mapping_rule(decision_paths, pack):
     return _rr("PACK_SCOPE_MAPPING", "FAIL", f"unsupported_target_scope:{scope}")
 
 
-def _forbidden_bypass_rule(patch_member_names, pack, active_bindings):
+def _forbidden_bypass_rule(
+    patch_member_names: list[str], pack: JsonDict, active_bindings: JsonList
+) -> RuleResult:
     exp, act = _su(active_bindings, "forbidden"), sorted(pack.get("forbidden_strategies", []))
     if act != exp:
         return _rr("PACK_FORBIDDEN_BYPASS", "FAIL", f"expected={exp}:actual={act}")
@@ -501,7 +526,9 @@ def _forbidden_bypass_rule(patch_member_names, pack, active_bindings):
     return _rr("PACK_FORBIDDEN_BYPASS", "PASS", "forbidden_bypass_checks_ok")
 
 
-def _recompute_pack_rule(args, pack, pack_raw):
+def _recompute_pack_rule(
+    args: Namespace, pack: JsonDict, pack_raw: bytes | None
+) -> tuple[RuleResult, JsonList | None]:
     spec_raw, err, source_path = _authority_spec_bytes(args, pack)
     if err is not None or spec_raw is None or source_path is None:
         status = "SKIP" if _is_missing_repo_spec_error(err) else "UNVERIFIED_ENVIRONMENT"
@@ -535,8 +562,10 @@ def _recompute_pack_rule(args, pack, pack_raw):
     ), active
 
 
-def _pack_rule_verdicts(pack, active_bindings, support_rules):
-    out = []
+def _pack_rule_verdicts(
+    pack: JsonDict, active_bindings: JsonList, support_rules: dict[str, RuleResult]
+) -> list[RuleResult]:
+    out: list[RuleResult] = []
     bindings = active_bindings if active_bindings is not None else pack.get("active_bindings", [])
     for binding in bindings:
         bid = str(binding.get("id", "<missing-id>"))
@@ -564,7 +593,7 @@ def _pack_rule_verdicts(pack, active_bindings, support_rules):
     return out
 
 
-def _verdict_coverage_rule(pack, verdicts):
+def _verdict_coverage_rule(pack: JsonDict, verdicts: list[RuleResult]) -> RuleResult:
     exp = sorted(str(b.get("id", "<missing-id>")) for b in pack.get("active_bindings", []))
     act = sorted(v.rule_id.split(":", 1)[1] for v in verdicts if v.rule_id.startswith("PACK_RULE:"))
     return _rr(
@@ -572,7 +601,12 @@ def _verdict_coverage_rule(pack, verdicts):
     )
 
 
-def _pack_rules(args, instructions_path, decision_paths, patch_member_names):
+def _pack_rules(
+    args: Namespace,
+    instructions_path: str | Path | None,
+    decision_paths: list[str],
+    patch_member_names: list[str],
+) -> tuple[list[RuleResult], JsonDict | None]:
     out, pack, pack_raw, _hash_value = _read_instructions_zip(instructions_path)
     if pack is None:
         return out, None

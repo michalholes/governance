@@ -6,8 +6,17 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn, TypeAlias
 from zipfile import ZipFile
+
+if TYPE_CHECKING:
+    from .type_aliases import JsonDict, JsonList
+else:
+    try:
+        from .type_aliases import JsonDict, JsonList
+    except ImportError:
+        JsonDict: TypeAlias = dict[str, Any]
+        JsonList: TypeAlias = list[JsonDict]
 
 if TYPE_CHECKING or __package__:
     from .workflow_effective_context import (
@@ -31,8 +40,8 @@ def _default_spec_path(repo_path: str) -> str:
     return REPO_SPEC_PATH
 
 
-def _load_jsonl_bytes(raw: bytes) -> list[dict]:
-    objects: list[dict] = []
+def _load_jsonl_bytes(raw: bytes) -> JsonList:
+    objects: JsonList = []
     for line in raw.decode("utf-8").splitlines():
         line = line.strip()
         if line:
@@ -41,12 +50,12 @@ def _load_jsonl_bytes(raw: bytes) -> list[dict]:
 
 
 def _workflow_objects(
-    spec_objects: list[dict],
+    spec_objects: JsonList,
     *,
     scope: str,
     spec_path: str,
     governance_workflow_raw: bytes | None = None,
-) -> list[dict]:
+) -> JsonList:
     if any(obj.get("type") == "workflow_step" for obj in spec_objects):
         return spec_objects
     if scope != "implementation_scope":
@@ -180,10 +189,10 @@ def target_mode(scope: str) -> str:
     return "final"
 
 
-def collect_objects(objects: list[dict]) -> tuple[dict, list[dict], dict[str, dict]]:
-    binding_meta = None
-    bindings: list[dict] = []
-    oracles: dict[str, dict] = {}
+def collect_objects(objects: JsonList) -> tuple[JsonDict, JsonList, dict[str, JsonDict]]:
+    binding_meta: JsonDict | None = None
+    bindings: JsonList = []
+    oracles: dict[str, JsonDict] = {}
     for obj in objects:
         kind = obj.get("type")
         if kind == "binding_meta":
@@ -214,8 +223,8 @@ def collect_objects(objects: list[dict]) -> tuple[dict, list[dict], dict[str, di
     return binding_meta, bindings, oracles
 
 
-def active_bindings(bindings: list[dict], mode: str, scope: str) -> list[dict]:
-    active: list[dict] = []
+def active_bindings(bindings: JsonList, mode: str, scope: str) -> JsonList:
+    active: JsonList = []
     for binding in bindings:
         match = binding.get("match", {})
         if binding.get("binding_type") == "constraint_pack":
@@ -226,7 +235,7 @@ def active_bindings(bindings: list[dict], mode: str, scope: str) -> list[dict]:
     return active
 
 
-def ensure_consistency(bindings: list[dict], oracles: dict[str, dict]) -> None:
+def ensure_consistency(bindings: JsonList, oracles: dict[str, JsonDict]) -> None:
     if not bindings:
         fail_unbound()
     symbol_map: dict[tuple[str, str], list[str]] = {}
@@ -255,16 +264,16 @@ def ensure_consistency(bindings: list[dict], oracles: dict[str, dict]) -> None:
         fail_conflict()
 
 
-def union_values(bindings: list[dict], field: str) -> list:
+def union_values(bindings: JsonList, field: str) -> list[object]:
     values = {item for binding in bindings for item in binding.get(field, [])}
     return sorted(values)
 
 
-def binding_map(bindings: list[dict], key: str, value: str) -> dict[str, str]:
+def binding_map(bindings: JsonList, key: str, value: str) -> dict[str, str]:
     return {binding[key]: binding[value] for binding in bindings}
 
 
-def _resolve_workflow_contract(objects: list[dict], scope: str, mode: str) -> dict:
+def _resolve_workflow_contract(objects: JsonList, scope: str, mode: str) -> JsonDict:
     steps = [obj for obj in objects if obj.get("type") == "workflow_step"]
     transitions = [obj for obj in objects if obj.get("type") == "workflow_transition"]
     gates = [obj for obj in objects if obj.get("type") == "workflow_gate"]
@@ -389,7 +398,7 @@ def build_pack(
     return (payload + "\n").encode("utf-8")
 
 
-def handoff_text(target: str, scope: str, mode: str, workflow_contract: dict) -> str:
+def handoff_text(target: str, scope: str, mode: str, workflow_contract: JsonDict) -> str:
     lines = [
         "SPEC CONTEXT",
         "RC version used: resolver-generated",

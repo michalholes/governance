@@ -2,6 +2,16 @@ import json
 import sys
 from collections import defaultdict
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, TypeAlias
+
+if TYPE_CHECKING:
+    from .type_aliases import JsonDict, JsonList
+else:
+    try:
+        from .type_aliases import JsonDict, JsonList
+    except ImportError:
+        JsonDict: TypeAlias = dict[str, Any]
+        JsonList: TypeAlias = list[JsonDict]
 
 FORBIDDEN_FIELDS = {
     "derivation",
@@ -51,7 +61,7 @@ BINDING_REQUIRED_FIELDS = (
 )
 
 
-def load(path: Path) -> list[dict]:
+def load(path: Path) -> JsonList:
     with path.open(encoding="utf-8") as handle:
         return [json.loads(line) for line in handle if line.strip()]
 
@@ -65,7 +75,7 @@ def require_count(name: str, expected: int, actual: int | None) -> None:
         fail(f"meta count mismatch {name}: expected={expected} actual={actual}")
 
 
-def ensure_unique_id(obj: dict, seen: set[str]) -> None:
+def ensure_unique_id(obj: JsonDict, seen: set[str]) -> None:
     obj_id = str(obj.get("id", "")).strip()
     if not obj_id:
         fail(f"missing id in {obj.get('type')}")
@@ -74,7 +84,7 @@ def ensure_unique_id(obj: dict, seen: set[str]) -> None:
     seen.add(obj_id)
 
 
-def validate_bindings(bindings: dict[str, dict], oracles: dict[str, dict]) -> None:
+def validate_bindings(bindings: dict[str, JsonDict], oracles: dict[str, JsonDict]) -> None:
     for binding_id, binding in bindings.items():
         oracle_ref = binding.get("oracle_ref")
         if oracle_ref not in oracles:
@@ -83,7 +93,7 @@ def validate_bindings(bindings: dict[str, dict], oracles: dict[str, dict]) -> No
             fail(f"binding {binding_id} conflict_policy must be fail_closed")
 
 
-def validate_rule_links(rules: dict[str, dict], caps: dict[str, dict]) -> None:
+def validate_rule_links(rules: dict[str, JsonDict], caps: dict[str, JsonDict]) -> None:
     rule_refs: defaultdict[str, int] = defaultdict(int)
     for capability_id, capability in caps.items():
         for rule_id in capability.get("triggers_rules", []):
@@ -96,7 +106,7 @@ def validate_rule_links(rules: dict[str, dict], caps: dict[str, dict]) -> None:
 
 
 def validate_routes(
-    caps: dict[str, dict], providers: dict[str, dict], routes: dict[str, dict]
+    caps: dict[str, JsonDict], providers: dict[str, JsonDict], routes: dict[str, JsonDict]
 ) -> None:
     cap_route_refs: defaultdict[str, int] = defaultdict(int)
     for route_id, route in routes.items():
@@ -126,7 +136,7 @@ def validate_routes(
             fail(f"provider coverage in route {route_id} missing {missing}")
 
 
-def validate_surfaces(routes: dict[str, dict], surfaces: dict[str, dict]) -> None:
+def validate_surfaces(routes: dict[str, JsonDict], surfaces: dict[str, JsonDict]) -> None:
     for surface_id, surface in surfaces.items():
         if not surface.get("route_ref"):
             fail(f"surface without route_ref {surface_id}")
@@ -136,7 +146,7 @@ def validate_surfaces(routes: dict[str, dict], surfaces: dict[str, dict]) -> Non
             fail(f"surface {surface_id} references missing route {surface['route_ref']}")
 
 
-def validate_implementations(impls: dict[str, dict], routes: dict[str, dict]) -> None:
+def validate_implementations(impls: dict[str, JsonDict], routes: dict[str, JsonDict]) -> None:
     for implementation_id, implementation in impls.items():
         route_id = str(implementation.get("implements_route", "")).strip()
         if not route_id or route_id not in routes:
@@ -149,15 +159,15 @@ def validate_implementations(impls: dict[str, dict], routes: dict[str, dict]) ->
 
 
 def validate_workflow(
-    rules: dict[str, dict],
-    caps: dict[str, dict],
-    routes: dict[str, dict],
-    surfaces: dict[str, dict],
-    steps: dict[str, dict],
-    transitions: dict[str, dict],
-    gates: dict[str, dict],
-    invalidations: dict[str, dict],
-    rollbacks: dict[str, dict],
+    rules: dict[str, JsonDict],
+    caps: dict[str, JsonDict],
+    routes: dict[str, JsonDict],
+    surfaces: dict[str, JsonDict],
+    steps: dict[str, JsonDict],
+    transitions: dict[str, JsonDict],
+    gates: dict[str, JsonDict],
+    invalidations: dict[str, JsonDict],
+    rollbacks: dict[str, JsonDict],
 ) -> None:
     if not steps:
         return
@@ -170,9 +180,9 @@ def validate_workflow(
     inbound: defaultdict[str, int] = defaultdict(int)
     outbound: defaultdict[str, int] = defaultdict(int)
     transitions_seen: set[tuple[str, str]] = set()
-    gates_by_step: defaultdict[str, list[dict]] = defaultdict(list)
-    invalidations_by_step: defaultdict[str, list[dict]] = defaultdict(list)
-    rollbacks_by_step: defaultdict[str, list[dict]] = defaultdict(list)
+    gates_by_step: defaultdict[str, JsonList] = defaultdict(list)
+    invalidations_by_step: defaultdict[str, JsonList] = defaultdict(list)
+    rollbacks_by_step: defaultdict[str, JsonList] = defaultdict(list)
 
     for step_id, step in steps.items():
         surface_ref = str(step.get("surface_ref", "")).strip()
@@ -298,23 +308,23 @@ def main(path: str) -> None:
 
     counts = objs[0].get("counts", {})
     seen_ids: set[str] = set()
-    rules: dict[str, dict] = {}
-    caps: dict[str, dict] = {}
-    providers: dict[str, dict] = {}
-    routes: dict[str, dict] = {}
-    surfaces: dict[str, dict] = {}
-    impls: dict[str, dict] = {}
-    bindings: dict[str, dict] = {}
-    oracles: dict[str, dict] = {}
-    sections: dict[str, dict] = {}
-    notes: dict[str, dict] = {}
-    source_meta: dict[str, dict] = {}
-    workflow_steps: dict[str, dict] = {}
-    workflow_transitions: dict[str, dict] = {}
-    workflow_gates: dict[str, dict] = {}
-    workflow_invalidations: dict[str, dict] = {}
-    workflow_rollbacks: dict[str, dict] = {}
-    binding_meta = None
+    rules: dict[str, JsonDict] = {}
+    caps: dict[str, JsonDict] = {}
+    providers: dict[str, JsonDict] = {}
+    routes: dict[str, JsonDict] = {}
+    surfaces: dict[str, JsonDict] = {}
+    impls: dict[str, JsonDict] = {}
+    bindings: dict[str, JsonDict] = {}
+    oracles: dict[str, JsonDict] = {}
+    sections: dict[str, JsonDict] = {}
+    notes: dict[str, JsonDict] = {}
+    source_meta: dict[str, JsonDict] = {}
+    workflow_steps: dict[str, JsonDict] = {}
+    workflow_transitions: dict[str, JsonDict] = {}
+    workflow_gates: dict[str, JsonDict] = {}
+    workflow_invalidations: dict[str, JsonDict] = {}
+    workflow_rollbacks: dict[str, JsonDict] = {}
+    binding_meta: JsonDict | None = None
 
     for obj in objs:
         obj_type = obj.get("type")
