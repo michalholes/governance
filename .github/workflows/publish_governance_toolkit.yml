@@ -65,10 +65,19 @@ jobs:
           TOOLKIT_ZIP="$OUT_DIR/toolkit.zip"
           rm -f "$TOOLKIT_ZIP"
 
-          (
-            cd "$STAGE_DIR"
-            python -m zipfile -c "$TOOLKIT_ZIP" governance/*
-          )
+          STAGE_DIR="$STAGE_DIR" TOOLKIT_ZIP="$TOOLKIT_ZIP" python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile, ZIP_DEFLATED
+          import os
+
+          stage_dir = Path(os.environ["STAGE_DIR"]).resolve()
+          toolkit_zip = Path(os.environ["TOOLKIT_ZIP"]).resolve()
+
+          with ZipFile(toolkit_zip, "w", compression=ZIP_DEFLATED) as zf:
+              for path in sorted((stage_dir / "governance").rglob("*")):
+                  if path.is_file():
+                      zf.write(path, arcname=path.relative_to(stage_dir).as_posix())
+          PY
 
           ARCHIVE_SHA256="$(python -c 'from pathlib import Path; import hashlib; p = Path("artifacts/governance_toolkit/toolkit.zip"); print(hashlib.sha256(p.read_bytes()).hexdigest())')"
 
