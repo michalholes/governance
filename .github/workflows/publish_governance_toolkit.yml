@@ -4,107 +4,272 @@ on:
   push:
     branches:
       - main
-    paths:
-      - "src/governance/**"
-      - "governance/governance.jsonl"
-      - "governance/specification.jsonl"
-      - ".github/workflows/publish_governance_toolkit.yml"
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: governance-publish-main
+  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  SNAPSHOT_REPOSITORY: michalholes/repo_snapshots
+  SNAPSHOT_BRANCH: main
+  SNAPSHOT_PATTERN: governance-main_*.zip
+  TOOLKIT_PATTERN: governance-toolkit_*.zip
+  TOOLKIT_MANIFEST_NAME: governance-toolkit_manifest.json
 
 jobs:
   publish:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout governance repository
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          path: governance_repo
+
+      - name: Assert repo_snapshots token is present
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${{ secrets.PUSH_SNAPSHOT }}" ]; then
+            echo "PUSH_SNAPSHOT is empty or unavailable"
+            exit 1
+          fi
+
+      - name: Checkout repo_snapshots
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.SNAPSHOT_REPOSITORY }}
+          ref: ${{ env.SNAPSHOT_BRANCH }}
+          token: ${{ secrets.PUSH_SNAPSHOT }}
+          fetch-depth: 0
+          path: repo_snapshots
+
+      - name: Compute source identifiers
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          GOVERNANCE_ROOT="$GITHUB_WORKSPACE/governance_repo"
+          SOURCE_SHA="$(git -C "$GOVERNANCE_ROOT" rev-parse HEAD)"
+
+          echo "GOVERNANCE_ROOT=$GOVERNANCE_ROOT" >> "$GITHUB_ENV"
+          echo "SOURCE_SHA=$SOURCE_SHA" >> "$GITHUB_ENV"
+          echo "SNAPSHOT_NAME=governance-main_${SOURCE_SHA}.zip" >> "$GITHUB_ENV"
+          echo "TOOLKIT_NAME=governance-toolkit_${SOURCE_SHA}.zip" >> "$GITHUB_ENV"
+
+      - name: Build filtered repository snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          STAGE_ROOT="$RUNNER_TEMP/repo_snapshot_stage"
+          ARCHIVE_DIR="$RUNNER_TEMP/repo_snapshot"
+          ARCHIVE_PATH="$ARCHIVE_DIR/$SNAPSHOT_NAME"
+
+          rm -rf "$STAGE_ROOT" "$ARCHIVE_DIR"
+          mkdir -p "$STAGE_ROOT" "$ARCHIVE_DIR"
+
+          git -C "$GOVERNANCE_ROOT" archive "$SOURCE_SHA" | tar -x -C "$STAGE_ROOT"
+
+          rm -rf "$STAGE_ROOT/artifacts"
+
+          STAGE_ROOT="$STAGE_ROOT" ARCHIVE_PATH="$ARCHIVE_PATH" python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile, ZIP_DEFLATED
+          import os
+
+          stage_root = Path(os.environ["STAGE_ROOT"]).resolve()
+          archive_path = Path(os.environ["ARCHIVE_PATH"]).resolve()
+
+          with ZipFile(archive_path, "w", compression=ZIP_DEFLATED) as zf:
+              for path in sorted(stage_root.rglob("*")):
+                  if path.is_file():
+                      zf.write(path, arcname=path.relative_to(stage_root).as_posix())
+          PY
+
+          echo "SNAPSHOT_ARCHIVE_PATH=$ARCHIVE_PATH" >> "$GITHUB_ENV"
+
+      - name: Publish repository snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SNAPSHOT_REPO="$GITHUB_WORKSPACE/repo_snapshots"
+
+          while IFS= read -r file; do
+            [ -n "$file" ] || continue
+            rm -f -- "$SNAPSHOT_REPO/$file"
+          done < <(find "$SNAPSHOT_REPO" -maxdepth 1 -type f -name "$SNAPSHOT_PATTERN" -printf '%P\n' | sort)
+
+          cp "$SNAPSHOT_ARCHIVE_PATH" "$SNAPSHOT_REPO/$SNAPSHOT_NAME"
+
+          cd "$SNAPSHOT_REPO"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No snapshot changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Publish governance snapshot ${SOURCE_SHA}"
+          git push origin "$SNAPSHOT_BRANCH"
+
+      - name: Detect toolkit-relevant changes
+        id: detect_toolkit
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TOOLKIT_CHANGED=false
+
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            TOOLKIT_CHANGED=true
+          else
+            BEFORE_SHA="${{ github.event.before }}"
+            if [ -z "$BEFORE_SHA" ] || [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
+              TOOLKIT_CHANGED=true
+            else
+              while IFS= read -r path; do
+                case "$path" in
+                  src/governance/*|governance/governance.jsonl|governance/specification.jsonl)
+                    TOOLKIT_CHANGED=true
+                    break
+                    ;;
+                esac
+              done < <(git -C "$GOVERNANCE_ROOT" diff --name-only "$BEFORE_SHA" "$SOURCE_SHA")
+            fi
+          fi
+
+          echo "toolkit_changed=$TOOLKIT_CHANGED" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
+        if: steps.detect_toolkit.outputs.toolkit_changed == 'true'
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
       - name: Build toolkit bundle and manifest
+        if: steps.detect_toolkit.outputs.toolkit_changed == 'true'
         shell: bash
         run: |
           set -euo pipefail
 
-          ROOT="$GITHUB_WORKSPACE"
-          OUT_DIR="$ROOT/artifacts/governance_toolkit"
+          OUT_DIR="$RUNNER_TEMP/toolkit_publish"
           STAGE_DIR="$(mktemp -d)"
           TOOLKIT_ROOT="$STAGE_DIR/governance"
 
           mkdir -p "$OUT_DIR"
           mkdir -p "$TOOLKIT_ROOT"
 
-          cp "$ROOT/src/governance/pm_validator.py" "$TOOLKIT_ROOT/"
-          cp "$ROOT/src/governance/pm_validator_runtime_support.py" "$TOOLKIT_ROOT/"
-          cp "$ROOT/src/governance/pm_validator_pack_contract.py" "$TOOLKIT_ROOT/"
-          cp "$ROOT/src/governance/pm_spec_validator.py" "$TOOLKIT_ROOT/"
-          cp "$ROOT/src/governance/rc_resolver.py" "$TOOLKIT_ROOT/"
-          cp "$ROOT/src/governance/validate_master_spec_v2.py" "$TOOLKIT_ROOT/"
-          cp "$ROOT/src/governance/render_master_spec_txt.py" "$TOOLKIT_ROOT/"
-          cp "$ROOT/src/governance/workflow_effective_context.py" "$TOOLKIT_ROOT/"
-          cp "$ROOT/src/governance/gov_navigator.py" "$TOOLKIT_ROOT/"
+          cp "$GOVERNANCE_ROOT/src/governance/pm_validator.py" "$TOOLKIT_ROOT/"
+          cp "$GOVERNANCE_ROOT/src/governance/pm_validator_runtime_support.py" "$TOOLKIT_ROOT/"
+          cp "$GOVERNANCE_ROOT/src/governance/pm_validator_pack_contract.py" "$TOOLKIT_ROOT/"
+          cp "$GOVERNANCE_ROOT/src/governance/pm_spec_validator.py" "$TOOLKIT_ROOT/"
+          cp "$GOVERNANCE_ROOT/src/governance/rc_resolver.py" "$TOOLKIT_ROOT/"
+          cp "$GOVERNANCE_ROOT/src/governance/validate_master_spec_v2.py" "$TOOLKIT_ROOT/"
+          cp "$GOVERNANCE_ROOT/src/governance/render_master_spec_txt.py" "$TOOLKIT_ROOT/"
+          cp "$GOVERNANCE_ROOT/src/governance/workflow_effective_context.py" "$TOOLKIT_ROOT/"
+          cp "$GOVERNANCE_ROOT/src/governance/gov_navigator.py" "$TOOLKIT_ROOT/"
+          cp "$GOVERNANCE_ROOT/src/governance/type_aliases.py" "$TOOLKIT_ROOT/"
 
-          cp "$ROOT/governance/governance.jsonl" "$TOOLKIT_ROOT/"
-          cp "$ROOT/governance/specification.jsonl" "$TOOLKIT_ROOT/"
+          cp "$GOVERNANCE_ROOT/governance/governance.jsonl" "$TOOLKIT_ROOT/"
+          cp "$GOVERNANCE_ROOT/governance/specification.jsonl" "$TOOLKIT_ROOT/"
 
-          if [ -f "$ROOT/src/governance/__init__.py" ]; then
-            cp "$ROOT/src/governance/__init__.py" "$TOOLKIT_ROOT/"
+          if [ -f "$GOVERNANCE_ROOT/src/governance/__init__.py" ]; then
+            cp "$GOVERNANCE_ROOT/src/governance/__init__.py" "$TOOLKIT_ROOT/"
           fi
 
-          TOOLKIT_ZIP="$OUT_DIR/toolkit.zip"
-          rm -f "$TOOLKIT_ZIP"
+          TOOLKIT_ARCHIVE_PATH="$OUT_DIR/$TOOLKIT_NAME"
 
-          STAGE_DIR="$STAGE_DIR" TOOLKIT_ZIP="$TOOLKIT_ZIP" python - <<'PY'
+          STAGE_DIR="$STAGE_DIR" TOOLKIT_ARCHIVE_PATH="$TOOLKIT_ARCHIVE_PATH" python - <<'PY'
           from pathlib import Path
           from zipfile import ZipFile, ZIP_DEFLATED
           import os
 
           stage_dir = Path(os.environ["STAGE_DIR"]).resolve()
-          toolkit_zip = Path(os.environ["TOOLKIT_ZIP"]).resolve()
+          toolkit_archive_path = Path(os.environ["TOOLKIT_ARCHIVE_PATH"]).resolve()
 
-          with ZipFile(toolkit_zip, "w", compression=ZIP_DEFLATED) as zf:
+          with ZipFile(toolkit_archive_path, "w", compression=ZIP_DEFLATED) as zf:
               for path in sorted((stage_dir / "governance").rglob("*")):
                   if path.is_file():
                       zf.write(path, arcname=path.relative_to(stage_dir).as_posix())
           PY
 
-          ARCHIVE_SHA256="$(python -c 'from pathlib import Path; import hashlib; p = Path("artifacts/governance_toolkit/toolkit.zip"); print(hashlib.sha256(p.read_bytes()).hexdigest())')"
+          TOOLKIT_SHA256="$(TOOLKIT_ARCHIVE_PATH="$TOOLKIT_ARCHIVE_PATH" python - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import os
 
-          REMOTE_SIG="sha-${GITHUB_SHA}"
-          MANIFEST_PATH="$OUT_DIR/manifest.json"
-          ARCHIVE_URL="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/artifacts/governance_toolkit/toolkit.zip"
+          path = Path(os.environ["TOOLKIT_ARCHIVE_PATH"]).resolve()
+          print(hashlib.sha256(path.read_bytes()).hexdigest())
+          PY
+          )"
+
+          TOOLKIT_MANIFEST_PATH="$OUT_DIR/$TOOLKIT_MANIFEST_NAME"
+          ARCHIVE_URL="https://raw.githubusercontent.com/${SNAPSHOT_REPOSITORY}/${SNAPSHOT_BRANCH}/${TOOLKIT_NAME}"
+          REMOTE_SIG="sha-${SOURCE_SHA}"
 
           REMOTE_SIG="$REMOTE_SIG" \
           ARCHIVE_URL="$ARCHIVE_URL" \
-          ARCHIVE_SHA256="$ARCHIVE_SHA256" \
-          MANIFEST_PATH="$MANIFEST_PATH" \
-          python -c 'from pathlib import Path; import json, os; manifest = {"remote_sig": os.environ["REMOTE_SIG"], "archive_url": os.environ["ARCHIVE_URL"], "archive_sha256": os.environ["ARCHIVE_SHA256"]}; Path(os.environ["MANIFEST_PATH"]).write_text(json.dumps(manifest, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")'
+          TOOLKIT_SHA256="$TOOLKIT_SHA256" \
+          TOOLKIT_MANIFEST_PATH="$TOOLKIT_MANIFEST_PATH" \
+          python - <<'PY'
+          from pathlib import Path
+          import json
+          import os
 
-      - name: Commit published artifacts
+          manifest = {
+              "remote_sig": os.environ["REMOTE_SIG"],
+              "archive_url": os.environ["ARCHIVE_URL"],
+              "archive_sha256": os.environ["TOOLKIT_SHA256"],
+          }
+          Path(os.environ["TOOLKIT_MANIFEST_PATH"]).write_text(
+              json.dumps(manifest, indent=2, ensure_ascii=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+          echo "TOOLKIT_ARCHIVE_PATH=$TOOLKIT_ARCHIVE_PATH" >> "$GITHUB_ENV"
+          echo "TOOLKIT_MANIFEST_PATH=$TOOLKIT_MANIFEST_PATH" >> "$GITHUB_ENV"
+
+      - name: Publish toolkit bundle and manifest
+        if: steps.detect_toolkit.outputs.toolkit_changed == 'true'
         shell: bash
         run: |
           set -euo pipefail
 
+          SNAPSHOT_REPO="$GITHUB_WORKSPACE/repo_snapshots"
+
+          while IFS= read -r file; do
+            [ -n "$file" ] || continue
+            rm -f -- "$SNAPSHOT_REPO/$file"
+          done < <(find "$SNAPSHOT_REPO" -maxdepth 1 -type f -name "$TOOLKIT_PATTERN" -printf '%P\n' | sort)
+
+          rm -f -- "$SNAPSHOT_REPO/$TOOLKIT_MANIFEST_NAME"
+
+          cp "$TOOLKIT_ARCHIVE_PATH" "$SNAPSHOT_REPO/$TOOLKIT_NAME"
+          cp "$TOOLKIT_MANIFEST_PATH" "$SNAPSHOT_REPO/$TOOLKIT_MANIFEST_NAME"
+
+          cd "$SNAPSHOT_REPO"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add artifacts/governance_toolkit/toolkit.zip artifacts/governance_toolkit/manifest.json
+          git add -A
 
           if git diff --cached --quiet; then
-            echo "No artifact changes to commit."
+            echo "No toolkit changes to commit."
             exit 0
           fi
 
-          git commit -m "Publish governance toolkit artifacts"
-          git push
+          git commit -m "Publish governance toolkit ${SOURCE_SHA}"
+          git push origin "$SNAPSHOT_BRANCH"
