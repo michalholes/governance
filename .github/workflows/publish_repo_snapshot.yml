@@ -1,0 +1,107 @@
+name: publish-repo-snapshot
+
+on:
+  workflow_run:
+    workflows:
+      - publish-governance-toolkit
+    types:
+      - completed
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-repo-snapshot-main
+  cancel-in-progress: false
+
+env:
+  SNAPSHOT_REPOSITORY: michalholes/repo_snapshots
+  SNAPSHOT_BRANCH: main
+  SNAPSHOT_PATTERN: governance-main_*.zip
+
+jobs:
+  publish:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout governance main
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Refresh main and compute final SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git fetch origin main --prune
+          git checkout -B main origin/main
+
+          FINAL_SHA="$(git rev-parse HEAD)"
+          SNAPSHOT_NAME="governance-main_${FINAL_SHA}.zip"
+
+          echo "FINAL_SHA=$FINAL_SHA" >> "$GITHUB_ENV"
+          echo "SNAPSHOT_NAME=$SNAPSHOT_NAME" >> "$GITHUB_ENV"
+
+      - name: Build repository snapshot archive
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$RUNNER_TEMP/repo_snapshot"
+          ARCHIVE_PATH="$RUNNER_TEMP/repo_snapshot/$SNAPSHOT_NAME"
+
+          git archive --format=zip --output="$ARCHIVE_PATH" "$FINAL_SHA"
+
+          echo "ARCHIVE_PATH=$ARCHIVE_PATH" >> "$GITHUB_ENV"
+
+      - name: Checkout repo_snapshots
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.SNAPSHOT_REPOSITORY }}
+          ref: ${{ env.SNAPSHOT_BRANCH }}
+          token: ${{ secrets.REPO_SNAPSHOTS_TOKEN }}
+          path: repo_snapshots
+          fetch-depth: 0
+
+      - name: Replace previous governance snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SNAPSHOT_REPO="$GITHUB_WORKSPACE/repo_snapshots"
+
+          mapfile -t OLD_SNAPSHOTS < <(
+            find "$SNAPSHOT_REPO" -maxdepth 1 -type f -name "$SNAPSHOT_PATTERN" -printf '%P\n' | sort
+          )
+
+          if [ "${#OLD_SNAPSHOTS[@]}" -gt 0 ]; then
+            printf '%s\0' "${OLD_SNAPSHOTS[@]}" | xargs -0 -I{} rm -f -- "$SNAPSHOT_REPO/{}"
+          fi
+
+          cp "$ARCHIVE_PATH" "$SNAPSHOT_REPO/$SNAPSHOT_NAME"
+
+      - name: Commit and push snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$GITHUB_WORKSPACE/repo_snapshots"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No snapshot changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Publish governance snapshot ${FINAL_SHA}"
+          git push origin "$SNAPSHOT_BRANCH"
