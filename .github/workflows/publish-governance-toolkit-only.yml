@@ -10,17 +10,16 @@ permissions:
   contents: read
 
 concurrency:
-  group: governance-publish-main
+  group: governance-toolkit-publish-main
   cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   SNAPSHOT_REPOSITORY: michalholes/repo_snapshots
   SNAPSHOT_BRANCH: main
-  SNAPSHOT_PATTERN: governance-main_*.zip
 
 jobs:
-  publish:
+  publish_toolkit:
     runs-on: ubuntu-latest
 
     steps:
@@ -59,67 +58,6 @@ jobs:
 
           echo "GOVERNANCE_ROOT=$GOVERNANCE_ROOT" >> "$GITHUB_ENV"
           echo "SOURCE_SHA=$SOURCE_SHA" >> "$GITHUB_ENV"
-          echo "SNAPSHOT_NAME=governance-main_${SOURCE_SHA}.zip" >> "$GITHUB_ENV"
-
-      - name: Build filtered repository snapshot
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          STAGE_ROOT="$RUNNER_TEMP/repo_snapshot_stage"
-          ARCHIVE_DIR="$RUNNER_TEMP/repo_snapshot"
-          ARCHIVE_PATH="$ARCHIVE_DIR/$SNAPSHOT_NAME"
-
-          rm -rf "$STAGE_ROOT" "$ARCHIVE_DIR"
-          mkdir -p "$STAGE_ROOT" "$ARCHIVE_DIR"
-
-          git -C "$GOVERNANCE_ROOT" archive --format=tar "$SOURCE_SHA" | tar -x -C "$STAGE_ROOT"
-
-          rm -rf "$STAGE_ROOT/artifacts"
-
-          STAGE_ROOT="$STAGE_ROOT" ARCHIVE_PATH="$ARCHIVE_PATH" python - <<'PY'
-          from pathlib import Path
-          from zipfile import ZipFile, ZIP_DEFLATED
-          import os
-
-          stage_root = Path(os.environ["STAGE_ROOT"]).resolve()
-          archive_path = Path(os.environ["ARCHIVE_PATH"]).resolve()
-
-          with ZipFile(archive_path, "w", compression=ZIP_DEFLATED) as zf:
-              for path in sorted(stage_root.rglob("*")):
-                  if path.is_file():
-                      zf.write(path, arcname=path.relative_to(stage_root).as_posix())
-          PY
-
-          echo "SNAPSHOT_ARCHIVE_PATH=$ARCHIVE_PATH" >> "$GITHUB_ENV"
-
-      - name: Publish repository snapshot
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          SNAPSHOT_REPO="$GITHUB_WORKSPACE/repo_snapshots"
-
-          while IFS= read -r file; do
-            [ -n "$file" ] || continue
-            rm -f -- "$SNAPSHOT_REPO/$file"
-          done < <(find "$SNAPSHOT_REPO" -maxdepth 1 -type f -name "$SNAPSHOT_PATTERN" -printf '%P\n' | sort)
-
-          cp "$SNAPSHOT_ARCHIVE_PATH" "$SNAPSHOT_REPO/$SNAPSHOT_NAME"
-
-          cd "$SNAPSHOT_REPO"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git add -A
-
-          if git diff --cached --quiet; then
-            echo "No snapshot changes to commit."
-            exit 0
-          fi
-
-          git commit -m "Publish governance snapshot ${SOURCE_SHA}"
-          git push origin "$SNAPSHOT_BRANCH"
 
       - name: Detect toolkit-relevant changes
         id: detect_toolkit
