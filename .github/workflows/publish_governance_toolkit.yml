@@ -18,8 +18,6 @@ env:
   SNAPSHOT_REPOSITORY: michalholes/repo_snapshots
   SNAPSHOT_BRANCH: main
   SNAPSHOT_PATTERN: governance-main_*.zip
-  TOOLKIT_PATTERN: governance-toolkit_*.zip
-  TOOLKIT_MANIFEST_NAME: governance-toolkit_manifest.json
 
 jobs:
   publish:
@@ -62,7 +60,6 @@ jobs:
           echo "GOVERNANCE_ROOT=$GOVERNANCE_ROOT" >> "$GITHUB_ENV"
           echo "SOURCE_SHA=$SOURCE_SHA" >> "$GITHUB_ENV"
           echo "SNAPSHOT_NAME=governance-main_${SOURCE_SHA}.zip" >> "$GITHUB_ENV"
-          echo "TOOLKIT_NAME=governance-toolkit_${SOURCE_SHA}.zip" >> "$GITHUB_ENV"
 
       - name: Build filtered repository snapshot
         shell: bash
@@ -76,7 +73,7 @@ jobs:
           rm -rf "$STAGE_ROOT" "$ARCHIVE_DIR"
           mkdir -p "$STAGE_ROOT" "$ARCHIVE_DIR"
 
-          git -C "$GOVERNANCE_ROOT" archive "$SOURCE_SHA" | tar -x -C "$STAGE_ROOT"
+          git -C "$GOVERNANCE_ROOT" archive --format=tar "$SOURCE_SHA" | tar -x -C "$STAGE_ROOT"
 
           rm -rf "$STAGE_ROOT/artifacts"
 
@@ -139,14 +136,9 @@ jobs:
             if [ -z "$BEFORE_SHA" ] || [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
               TOOLKIT_CHANGED=true
             else
-              while IFS= read -r path; do
-                case "$path" in
-                  src/governance/*|governance/governance.jsonl|governance/specification.jsonl)
-                    TOOLKIT_CHANGED=true
-                    break
-                    ;;
-                esac
-              done < <(git -C "$GOVERNANCE_ROOT" diff --name-only "$BEFORE_SHA" "$SOURCE_SHA")
+              if git -C "$GOVERNANCE_ROOT" diff --name-only "$BEFORE_SHA" "$SOURCE_SHA" | grep -Eq '^(src/governance/|governance/governance\.jsonl$|governance/specification\.jsonl$)'; then
+                TOOLKIT_CHANGED=true
+              fi
             fi
           fi
 
@@ -189,7 +181,7 @@ jobs:
             cp "$GOVERNANCE_ROOT/src/governance/__init__.py" "$TOOLKIT_ROOT/"
           fi
 
-          TOOLKIT_ARCHIVE_PATH="$OUT_DIR/$TOOLKIT_NAME"
+          TOOLKIT_ARCHIVE_PATH="$OUT_DIR/toolkit.zip"
 
           STAGE_DIR="$STAGE_DIR" TOOLKIT_ARCHIVE_PATH="$TOOLKIT_ARCHIVE_PATH" python - <<'PY'
           from pathlib import Path
@@ -215,8 +207,8 @@ jobs:
           PY
           )"
 
-          TOOLKIT_MANIFEST_PATH="$OUT_DIR/$TOOLKIT_MANIFEST_NAME"
-          ARCHIVE_URL="https://raw.githubusercontent.com/${SNAPSHOT_REPOSITORY}/${SNAPSHOT_BRANCH}/${TOOLKIT_NAME}"
+          TOOLKIT_MANIFEST_PATH="$OUT_DIR/manifest.json"
+          ARCHIVE_URL="https://raw.githubusercontent.com/${SNAPSHOT_REPOSITORY}/${SNAPSHOT_BRANCH}/toolkit.zip"
           REMOTE_SIG="sha-${SOURCE_SHA}"
 
           REMOTE_SIG="$REMOTE_SIG" \
@@ -250,15 +242,10 @@ jobs:
 
           SNAPSHOT_REPO="$GITHUB_WORKSPACE/repo_snapshots"
 
-          while IFS= read -r file; do
-            [ -n "$file" ] || continue
-            rm -f -- "$SNAPSHOT_REPO/$file"
-          done < <(find "$SNAPSHOT_REPO" -maxdepth 1 -type f -name "$TOOLKIT_PATTERN" -printf '%P\n' | sort)
+          rm -f -- "$SNAPSHOT_REPO/toolkit.zip" "$SNAPSHOT_REPO/manifest.json"
 
-          rm -f -- "$SNAPSHOT_REPO/$TOOLKIT_MANIFEST_NAME"
-
-          cp "$TOOLKIT_ARCHIVE_PATH" "$SNAPSHOT_REPO/$TOOLKIT_NAME"
-          cp "$TOOLKIT_MANIFEST_PATH" "$SNAPSHOT_REPO/$TOOLKIT_MANIFEST_NAME"
+          cp "$TOOLKIT_ARCHIVE_PATH" "$SNAPSHOT_REPO/toolkit.zip"
+          cp "$TOOLKIT_MANIFEST_PATH" "$SNAPSHOT_REPO/manifest.json"
 
           cd "$SNAPSHOT_REPO"
           git config user.name "github-actions[bot]"
