@@ -1,0 +1,113 @@
+name: sync-governance-jsonl
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-governance-jsonl-main
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  SOURCE_FILE: governance/governance.jsonl
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target_repo:
+          - audiomason2
+          - patchhub
+
+    steps:
+      - name: Checkout governance repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          path: governance_repo
+
+      - name: Assert target push token is present
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${{ secrets.PUSH_GOVERNANCE_SYNC }}" ]; then
+            echo "PUSH_GOVERNANCE_SYNC is empty or unavailable"
+            exit 1
+          fi
+
+      - name: Compute source metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          GOVERNANCE_ROOT="$GITHUB_WORKSPACE/governance_repo"
+          SOURCE_SHA="$(git -C "$GOVERNANCE_ROOT" rev-parse HEAD)"
+          ABS_SOURCE_FILE="$GOVERNANCE_ROOT/$SOURCE_FILE"
+
+          if [ ! -f "$ABS_SOURCE_FILE" ]; then
+            echo "Source file not found: $ABS_SOURCE_FILE"
+            exit 1
+          fi
+
+          echo "GOVERNANCE_ROOT=$GOVERNANCE_ROOT" >> "$GITHUB_ENV"
+          echo "SOURCE_SHA=$SOURCE_SHA" >> "$GITHUB_ENV"
+          echo "ABS_SOURCE_FILE=$ABS_SOURCE_FILE" >> "$GITHUB_ENV"
+
+      - name: Checkout target repository
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ github.repository_owner }}/${{ matrix.target_repo }}
+          token: ${{ secrets.PUSH_GOVERNANCE_SYNC }}
+          fetch-depth: 0
+          path: target_repo
+
+      - name: Sync governance.jsonl to target repository
+        shell: bash
+        env:
+          TARGET_REPOSITORY: ${{ github.repository_owner }}/${{ matrix.target_repo }}
+        run: |
+          set -euo pipefail
+
+          TARGET_ROOT="$GITHUB_WORKSPACE/target_repo"
+          TARGET_FILE="$TARGET_ROOT/governance/governance.jsonl"
+
+          TARGET_BRANCH="$(git -C "$TARGET_ROOT" branch --show-current)"
+          if [ -z "$TARGET_BRANCH" ]; then
+            TARGET_BRANCH="$(git -C "$TARGET_ROOT" symbolic-ref --short refs/remotes/origin/HEAD | sed 's@^origin/@@')"
+          fi
+
+          if [ -z "$TARGET_BRANCH" ]; then
+            echo "Unable to determine target branch for $TARGET_REPOSITORY"
+            exit 1
+          fi
+
+          mkdir -p "$(dirname "$TARGET_FILE")"
+
+          if [ -f "$TARGET_FILE" ] && cmp -s "$ABS_SOURCE_FILE" "$TARGET_FILE"; then
+            echo "No governance.jsonl changes for $TARGET_REPOSITORY"
+            exit 0
+          fi
+
+          cp "$ABS_SOURCE_FILE" "$TARGET_FILE"
+
+          git -C "$TARGET_ROOT" config user.name "github-actions[bot]"
+          git -C "$TARGET_ROOT" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git -C "$TARGET_ROOT" add governance/governance.jsonl
+
+          if git -C "$TARGET_ROOT" diff --cached --quiet; then
+            echo "No staged changes for $TARGET_REPOSITORY"
+            exit 0
+          fi
+
+          git -C "$TARGET_ROOT" commit -m "Sync governance.jsonl from governance ${SOURCE_SHA}"
+          git -C "$TARGET_ROOT" push origin "HEAD:${TARGET_BRANCH}"
