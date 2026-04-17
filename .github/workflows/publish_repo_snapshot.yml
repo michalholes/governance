@@ -65,7 +65,7 @@ jobs:
         with:
           repository: ${{ env.SNAPSHOT_REPOSITORY }}
           ref: ${{ env.SNAPSHOT_BRANCH }}
-          token: ${{ secrets.REPO_SNAPSHOTS_TOKEN }}
+          token: ${{ secrets.PUSH_SNAPSHOT }}
           path: repo_snapshots
           fetch-depth: 0
 
