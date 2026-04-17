@@ -1,0 +1,138 @@
+name: sync-governance-jsonl
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: governance-jsonl-sync-main
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  AUDIOMASON2_REPOSITORY: michalholes/audiomason2
+  AUDIOMASON2_BRANCH: main
+  PATCHHUB_REPOSITORY: michalholes/patchhub
+  PATCHHUB_BRANCH: main
+  SOURCE_FILE: governance/governance.jsonl
+  TARGET_FILE: governance/governance.jsonl
+
+jobs:
+  sync_governance_jsonl:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout governance repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          path: governance_repo
+
+      - name: Assert target repositories token is present
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${{ secrets.PUSH_SNAPSHOT }}" ]; then
+            echo "PUSH_SNAPSHOT is empty or unavailable"
+            exit 1
+          fi
+
+      - name: Compute source identifiers
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          GOVERNANCE_ROOT="$GITHUB_WORKSPACE/governance_repo"
+          SOURCE_SHA="$(git -C "$GOVERNANCE_ROOT" rev-parse HEAD)"
+          SOURCE_PATH="$GOVERNANCE_ROOT/$SOURCE_FILE"
+
+          if [ ! -f "$SOURCE_PATH" ]; then
+            echo "Source file not found: $SOURCE_PATH"
+            exit 1
+          fi
+
+          echo "GOVERNANCE_ROOT=$GOVERNANCE_ROOT" >> "$GITHUB_ENV"
+          echo "SOURCE_SHA=$SOURCE_SHA" >> "$GITHUB_ENV"
+          echo "SOURCE_PATH=$SOURCE_PATH" >> "$GITHUB_ENV"
+
+      - name: Detect governance.jsonl changes
+        id: detect_governance_jsonl
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          JSONL_CHANGED=false
+
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            JSONL_CHANGED=true
+          else
+            BEFORE_SHA="${{ github.event.before }}"
+            if [ -z "$BEFORE_SHA" ] || [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
+              JSONL_CHANGED=true
+            else
+              if git -C "$GOVERNANCE_ROOT" diff --name-only "$BEFORE_SHA" "$SOURCE_SHA" | grep -Eq '^governance/governance\.jsonl$'; then
+                JSONL_CHANGED=true
+              fi
+            fi
+          fi
+
+          echo "jsonl_changed=$JSONL_CHANGED" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout audiomason2
+        if: steps.detect_governance_jsonl.outputs.jsonl_changed == 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.AUDIOMASON2_REPOSITORY }}
+          ref: ${{ env.AUDIOMASON2_BRANCH }}
+          token: ${{ secrets.PUSH_SNAPSHOT }}
+          fetch-depth: 0
+          path: audiomason2_repo
+
+      - name: Checkout patchhub
+        if: steps.detect_governance_jsonl.outputs.jsonl_changed == 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.PATCHHUB_REPOSITORY }}
+          ref: ${{ env.PATCHHUB_BRANCH }}
+          token: ${{ secrets.PUSH_SNAPSHOT }}
+          fetch-depth: 0
+          path: patchhub_repo
+
+      - name: Sync governance.jsonl to target repositories
+        if: steps.detect_governance_jsonl.outputs.jsonl_changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sync_repo() {
+            local repo_root="$1"
+            local repo_branch="$2"
+            local repo_label="$3"
+            local target_path="$repo_root/$TARGET_FILE"
+
+            mkdir -p "$(dirname "$target_path")"
+            cp "$SOURCE_PATH" "$target_path"
+
+            cd "$repo_root"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+            git add "$TARGET_FILE"
+
+            if git diff --cached --quiet; then
+              echo "No governance.jsonl changes to commit for $repo_label."
+              return 0
+            fi
+
+            git commit -m "Sync governance.jsonl from governance ${SOURCE_SHA}"
+            git push origin "$repo_branch"
+          }
+
+          sync_repo "$GITHUB_WORKSPACE/audiomason2_repo" "$AUDIOMASON2_BRANCH" "$AUDIOMASON2_REPOSITORY"
+          sync_repo "$GITHUB_WORKSPACE/patchhub_repo" "$PATCHHUB_BRANCH" "$PATCHHUB_REPOSITORY"
