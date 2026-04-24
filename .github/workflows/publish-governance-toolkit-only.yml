@@ -17,6 +17,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   SNAPSHOT_REPOSITORY: michalholes/repo_snapshots
   SNAPSHOT_BRANCH: main
+  TOOLKIT_PUBLISH_MAX_ATTEMPTS: "5"
 
 jobs:
   publish_toolkit:
@@ -180,21 +181,36 @@ jobs:
 
           SNAPSHOT_REPO="$GITHUB_WORKSPACE/repo_snapshots"
 
-          rm -f -- "$SNAPSHOT_REPO/toolkit.zip" "$SNAPSHOT_REPO/manifest.json"
+          git -C "$SNAPSHOT_REPO" config user.name "github-actions[bot]"
+          git -C "$SNAPSHOT_REPO" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          cp "$TOOLKIT_ARCHIVE_PATH" "$SNAPSHOT_REPO/toolkit.zip"
-          cp "$TOOLKIT_MANIFEST_PATH" "$SNAPSHOT_REPO/manifest.json"
+          for attempt in $(seq 1 "$TOOLKIT_PUBLISH_MAX_ATTEMPTS"); do
+            git -C "$SNAPSHOT_REPO" fetch origin "$SNAPSHOT_BRANCH"
+            git -C "$SNAPSHOT_REPO" reset --hard "origin/$SNAPSHOT_BRANCH"
+            git -C "$SNAPSHOT_REPO" clean -fd
 
-          cd "$SNAPSHOT_REPO"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            rm -f -- "$SNAPSHOT_REPO/toolkit.zip" "$SNAPSHOT_REPO/manifest.json"
 
-          git add -A
+            cp "$TOOLKIT_ARCHIVE_PATH" "$SNAPSHOT_REPO/toolkit.zip"
+            cp "$TOOLKIT_MANIFEST_PATH" "$SNAPSHOT_REPO/manifest.json"
 
-          if git diff --cached --quiet; then
-            echo "No toolkit changes to commit."
-            exit 0
-          fi
+            git -C "$SNAPSHOT_REPO" add -A
 
-          git commit -m "Publish governance toolkit ${SOURCE_SHA}"
-          git push origin "$SNAPSHOT_BRANCH"
+            if git -C "$SNAPSHOT_REPO" diff --cached --quiet; then
+              echo "No toolkit changes to commit."
+              exit 0
+            fi
+
+            git -C "$SNAPSHOT_REPO" commit -m "Publish governance toolkit ${SOURCE_SHA}"
+
+            if git -C "$SNAPSHOT_REPO" push origin "HEAD:$SNAPSHOT_BRANCH"; then
+              echo "Toolkit published on attempt ${attempt}."
+              exit 0
+            fi
+
+            echo "Toolkit publish race detected; retrying attempt ${attempt}/${TOOLKIT_PUBLISH_MAX_ATTEMPTS}."
+            sleep "$((attempt * 2))"
+          done
+
+          echo "Toolkit publish failed after ${TOOLKIT_PUBLISH_MAX_ATTEMPTS} attempts."
+          exit 1
