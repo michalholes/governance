@@ -1,1 +1,1 @@
-# sem vlož celý aktuálny obsah súboru
+<celý obsah súboru>
