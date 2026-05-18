@@ -19,8 +19,6 @@ env:
   AUDIOMASON2_BRANCH: main
   PATCHHUB_REPOSITORY: michalholes/patchhub
   PATCHHUB_BRANCH: main
-  SOURCE_FILE: governance/governance.jsonl
-  TARGET_FILE: governance/governance.jsonl
 
 jobs:
   sync_governance_jsonl:
@@ -50,18 +48,18 @@ jobs:
 
           GOVERNANCE_ROOT="$GITHUB_WORKSPACE/governance_repo"
           SOURCE_SHA="$(git -C "$GOVERNANCE_ROOT" rev-parse HEAD)"
-          SOURCE_PATH="$GOVERNANCE_ROOT/$SOURCE_FILE"
 
-          if [ ! -f "$SOURCE_PATH" ]; then
-            echo "Source file not found: $SOURCE_PATH"
-            exit 1
-          fi
+          for f in governance/governance.jsonl governance/governance_local.jsonl; do
+            if [ ! -f "$GOVERNANCE_ROOT/$f" ]; then
+              echo "Source file not found: $GOVERNANCE_ROOT/$f"
+              exit 1
+            fi
+          done
 
           echo "GOVERNANCE_ROOT=$GOVERNANCE_ROOT" >> "$GITHUB_ENV"
           echo "SOURCE_SHA=$SOURCE_SHA" >> "$GITHUB_ENV"
-          echo "SOURCE_PATH=$SOURCE_PATH" >> "$GITHUB_ENV"
 
-      - name: Detect governance.jsonl changes
+      - name: Detect governance file changes
         id: detect_governance_jsonl
         shell: bash
         run: |
@@ -76,7 +74,7 @@ jobs:
             if [ -z "$BEFORE_SHA" ] || [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
               JSONL_CHANGED=true
             else
-              if git -C "$GOVERNANCE_ROOT" diff --name-only "$BEFORE_SHA" "$SOURCE_SHA" | grep -Eq '^governance/governance\.jsonl$'; then
+              if git -C "$GOVERNANCE_ROOT" diff --name-only "$BEFORE_SHA" "$SOURCE_SHA" | grep -Eq '^governance/governance(_local)?\.jsonl$'; then
                 JSONL_CHANGED=true
               fi
             fi
@@ -104,7 +102,7 @@ jobs:
           fetch-depth: 0
           path: patchhub_repo
 
-      - name: Sync governance.jsonl to target repositories
+      - name: Sync governance files to target repositories
         if: steps.detect_governance_jsonl.outputs.jsonl_changed == 'true'
         shell: bash
         run: |
@@ -114,23 +112,23 @@ jobs:
             local repo_root="$1"
             local repo_branch="$2"
             local repo_label="$3"
-            local target_path="$repo_root/$TARGET_FILE"
 
-            mkdir -p "$(dirname "$target_path")"
-            cp "$SOURCE_PATH" "$target_path"
+            mkdir -p "$repo_root/governance"
+            cp "$GOVERNANCE_ROOT/governance/governance.jsonl"       "$repo_root/governance/governance.jsonl"
+            cp "$GOVERNANCE_ROOT/governance/governance_local.jsonl" "$repo_root/governance/governance_local.jsonl"
 
             cd "$repo_root"
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-            git add "$TARGET_FILE"
+            git add governance/governance.jsonl governance/governance_local.jsonl
 
             if git diff --cached --quiet; then
-              echo "No governance.jsonl changes to commit for $repo_label."
+              echo "No governance file changes to commit for $repo_label."
               return 0
             fi
 
-            git commit -m "Sync governance.jsonl from governance ${SOURCE_SHA}"
+            git commit -m "Sync governance files from governance ${SOURCE_SHA}"
             git push origin "$repo_branch"
           }
 
