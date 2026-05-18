@@ -111,6 +111,7 @@ jobs:
           cp "$GOVERNANCE_ROOT/src/governance/render_master_spec_txt.py" "$TOOLKIT_ROOT/"
           cp "$GOVERNANCE_ROOT/src/governance/workflow_effective_context.py" "$TOOLKIT_ROOT/"
           cp "$GOVERNANCE_ROOT/src/governance/gov_navigator.py" "$TOOLKIT_ROOT/"
+          cp "$GOVERNANCE_ROOT/src/governance/spec_navigator.py" "$TOOLKIT_ROOT/"
           cp "$GOVERNANCE_ROOT/src/governance/type_aliases.py" "$TOOLKIT_ROOT/"
 
           cp "$GOVERNANCE_ROOT/governance/governance.jsonl" "$TOOLKIT_ROOT/"
