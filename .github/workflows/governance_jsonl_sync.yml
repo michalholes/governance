@@ -74,7 +74,7 @@ jobs:
             if [ -z "$BEFORE_SHA" ] || [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
               JSONL_CHANGED=true
             else
-              if git -C "$GOVERNANCE_ROOT" diff --name-only "$BEFORE_SHA" "$SOURCE_SHA" | grep -Eq '^governance/governance(_local)?\.jsonl$'; then
+              if git -C "$GOVERNANCE_ROOT" diff --name-only "$BEFORE_SHA" "$SOURCE_SHA" | grep -Eq '^(governance/governance(_local)?\.jsonl|src/governance/spec_navigator\.py)$'; then
                 JSONL_CHANGED=true
               fi
             fi
@@ -114,14 +114,15 @@ jobs:
             local repo_label="$3"
 
             mkdir -p "$repo_root/governance"
-            cp "$GOVERNANCE_ROOT/governance/governance.jsonl"       "$repo_root/governance/governance.jsonl"
-            cp "$GOVERNANCE_ROOT/governance/governance_local.jsonl" "$repo_root/governance/governance_local.jsonl"
+            cp "$GOVERNANCE_ROOT/governance/governance.jsonl"            "$repo_root/governance/governance.jsonl"
+            cp "$GOVERNANCE_ROOT/governance/governance_local.jsonl"      "$repo_root/governance/governance_local.jsonl"
+            cp "$GOVERNANCE_ROOT/src/governance/spec_navigator.py"       "$repo_root/governance/spec_navigator.py"
 
             cd "$repo_root"
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-            git add governance/governance.jsonl governance/governance_local.jsonl
+            git add governance/governance.jsonl governance/governance_local.jsonl governance/spec_navigator.py
 
             if git diff --cached --quiet; then
               echo "No governance file changes to commit for $repo_label."
