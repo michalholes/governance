@@ -53,3 +53,7 @@ htmlcov/
 # Temp
 *.tmp
 *.log
+.aider*
+
+# Claude Code
+CLAUDE.md
