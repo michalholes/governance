@@ -11,7 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypeAlias, cast
 from zipfile import ZipFile
 
 if TYPE_CHECKING or __package__:
@@ -101,6 +101,19 @@ class ValidationError(Exception):
     pass
 
 
+@dataclass(frozen=True)
+class ValidatorArgs:
+    issue_id: str
+    commit_message: str
+    patch: str
+    instructions_zip: str
+    workspace_snapshot: str | None
+    workspace_root: str | None
+    repair_overlay: str | None
+    supplemental_file: list[str]
+    skip_external_gates: bool
+
+
 def _run(cmd: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, check=False)
 
@@ -112,24 +125,11 @@ def _read_zip(path: Path) -> tuple[list[str], dict[str, bytes]]:
     return names, items
 
 
-def _decode_ascii_text(raw: bytes) -> str | None:
-    try:
-        text = raw.decode("ascii")
-    except UnicodeDecodeError:
-        return None
-    return text[:-1] if text.endswith("\n") else text
-
-
 def _decode_ascii_raw(raw: bytes) -> str | None:
     try:
         return raw.decode("ascii")
     except UnicodeDecodeError:
         return None
-
-
-def _zip_text(items: dict[str, bytes], name: str) -> str | None:
-    raw = items.get(name)
-    return None if raw is None else _decode_ascii_text(raw)
 
 
 def _validate_target_bytes(raw: bytes) -> tuple[str | None, str | None]:
@@ -146,30 +146,11 @@ def _validate_target_bytes(raw: bytes) -> tuple[str | None, str | None]:
     return value, None
 
 
-def _target_rule(items: dict[str, bytes]) -> tuple[RuleResult, str | None]:
-    raw = items.get(TARGET_FILE_NAME)
-    if raw is None:
-        return RuleResult("TARGET_FILE", "FAIL", "missing_target_file"), None
-    value, err = _validate_target_bytes(raw)
-    if err is not None:
-        return RuleResult("TARGET_FILE", "FAIL", err), None
-    assert value is not None
-    return RuleResult("TARGET_FILE", "PASS", value), value
-
-
-def _is_ascii_text(text: str) -> bool:
-    return text.isascii()
-
-
-def _is_ascii_bytes(raw: bytes) -> bool:
-    return _decode_ascii_raw(raw) is not None
-
-
 def _validate_basename(path: Path, issue_id: str) -> RuleResult:
     match = PATCH_RE.fullmatch(path.name)
     if match is None:
         return RuleResult("PATCH_BASENAME", "FAIL", f"invalid_patch_basename:{path.name}")
-    actual = match.group("issue")
+    actual = str(match.group("issue") or "")
     if actual != issue_id:
         detail = f"issue_mismatch:expected={issue_id}:actual={actual}:name={path.name}"
         return RuleResult("PATCH_BASENAME", "FAIL", detail)
@@ -178,7 +159,10 @@ def _validate_basename(path: Path, issue_id: str) -> RuleResult:
 
 def _snapshot_target(path: Path) -> str | None:
     match = SNAPSHOT_TARGET_RE.fullmatch(path.name)
-    return None if match is None else match.group("target")
+    if match is None:
+        return None
+    target = str(match.group("target") or "")
+    return target or None
 
 
 def _initial_target_source_rule(path: Path | str) -> tuple[RuleResult, str | None]:
@@ -214,15 +198,6 @@ def _repair_snapshot_consistency_rule(path: Path | str, overlay_target: str) -> 
     detail = f"overlay={overlay_target}:snapshot={snapshot_target}"
     status = "PASS" if overlay_target == snapshot_target else "FAIL"
     return RuleResult("REPAIR_TARGET_SNAPSHOT_CONSISTENCY", status, detail)
-
-
-def _member_repo_path(member: str) -> str | None:
-    if not (member.startswith(PATCH_PREFIX) and member.endswith(PATCH_SUFFIX)):
-        return None
-    raw = member[len(PATCH_PREFIX) : -len(PATCH_SUFFIX)]
-    if not raw or "/" in raw or raw.endswith("__"):
-        return None
-    return raw.replace("__", "/")
 
 
 def _validate_patch_headers(expected_path: str, text: str) -> str | None:
@@ -303,11 +278,13 @@ def _support_rules(items: list[SupportRule]) -> list[RuleResult]:
 
 
 def _authority_files(
-    args: argparse.Namespace,
+    args: ValidatorArgs,
     decision_paths: list[str],
     patch_members: list[tuple[str, bytes]],
 ) -> tuple[dict[str, bytes], list[str], list[tuple[str, bytes]], list[RuleResult], str]:
-    snapshot = None if not args.workspace_snapshot else _iter_zip_files(args.workspace_snapshot)
+    snapshot = (
+        None if not args.workspace_snapshot else _iter_zip_files(Path(args.workspace_snapshot))
+    )
     workspace_root = None if not args.workspace_root else _support_read_root(args.workspace_root)
     overlay = None if not args.repair_overlay else _iter_zip_files(Path(args.repair_overlay))
     try:
@@ -410,7 +387,7 @@ def _count_exports(tree: ast.AST) -> int:
     total = 0
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            name = getattr(node, "name", "")
+            name = node.name
             if name and not name.startswith("_"):
                 total += 1
     return total
@@ -523,7 +500,7 @@ def _iter_import_modules(tree: ast.AST, *, current_module: str | None) -> list[s
 
 
 def _count_js_exports(text: str) -> int:
-    export_lines = len(_RE_EXPORT_LINE.findall(text))
+    export_lines = len(cast(list[str], _RE_EXPORT_LINE.findall(text)))
     module_exports = text.count("module.exports")
     dotted = {match.group(1) for match in _RE_EXPORTS_DOT.finditer(text)}
     return export_lines + module_exports + len(dotted)
@@ -761,13 +738,10 @@ AUTHORITY_ONLY_PATHS = {
     "governance/specification.jsonl",
 }
 
-if TYPE_CHECKING:
-    PackRulesFn = Callable[
-        [argparse.Namespace, Path | None, list[str], list[str]],
-        tuple[list[RuleResult], object | None],
-    ]
-else:
-    PackRulesFn = object
+PackRulesFn: TypeAlias = Callable[
+    ["ValidatorArgs", Path | None, list[str], list[str]],
+    tuple[list[RuleResult], dict[str, object] | None],
+]
 
 
 def _load_pack_rules() -> PackRulesFn:
@@ -779,11 +753,11 @@ def _load_pack_rules() -> PackRulesFn:
 
 
 def _run_pack_rules(
-    args: argparse.Namespace,
+    args: ValidatorArgs,
     instructions_path: Path | None,
     decision_paths: list[str],
     patch_member_names: list[str],
-) -> tuple[list[RuleResult], object | None]:
+) -> tuple[list[RuleResult], dict[str, object] | None]:
     return _load_pack_rules()(args, instructions_path, decision_paths, patch_member_names)
 
 
@@ -900,7 +874,7 @@ def _format(results: list[RuleResult]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _parse_args(argv: list[str]) -> argparse.Namespace:
+def _parse_args(argv: list[str]) -> ValidatorArgs:
     parser = argparse.ArgumentParser(description="Single-file PM validator for patch artifacts.")
     parser.add_argument("issue_id")
     parser.add_argument("commit_message")
@@ -918,7 +892,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--supplemental-file",
         action="append",
-        default=[],
+        default=cast(list[str], []),
         help="Repeat per repo-relative file path allowed during repair escalation.",
     )
     parser.add_argument(
@@ -926,7 +900,29 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Skip execution of external gates and emit SKIP cli_disabled verdicts.",
     )
-    return parser.parse_args(argv)
+    ns = parser.parse_args(argv)
+    values = cast(dict[str, object], vars(ns))
+    return ValidatorArgs(
+        issue_id=str(values["issue_id"]),
+        commit_message=str(values["commit_message"]),
+        patch=str(values["patch"]),
+        instructions_zip=str(values["instructions_zip"]),
+        workspace_snapshot=(
+            None
+            if values.get("workspace_snapshot") is None
+            else str(values["workspace_snapshot"])
+        ),
+        workspace_root=(
+            None if values.get("workspace_root") is None else str(values["workspace_root"])
+        ),
+        repair_overlay=(
+            None if values.get("repair_overlay") is None else str(values["repair_overlay"])
+        ),
+        supplemental_file=[
+            str(item) for item in cast(list[object], values.get("supplemental_file", []))
+        ],
+        skip_external_gates=bool(values.get("skip_external_gates", False)),
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -983,6 +979,7 @@ def main(argv: list[str] | None = None) -> int:
                 initial_target = Path(args.workspace_root).resolve().name.strip()
                 initial_rule = RuleResult("INITIAL_TARGET_SOURCE", "PASS", initial_target)
             else:
+                assert args.workspace_snapshot is not None
                 initial_rule, initial_target = _initial_target_source_rule(args.workspace_snapshot)
             results.append(initial_rule)
             if initial_target is not None:

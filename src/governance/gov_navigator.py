@@ -5,19 +5,23 @@ import argparse
 import json
 import sys
 from collections import defaultdict
-from collections.abc import Callable
-from importlib import import_module
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeAlias, TypedDict, cast
+from typing import TYPE_CHECKING, TypedDict, cast
 
 if TYPE_CHECKING:
-    from .type_aliases import JsonDict, JsonList
+    from .type_aliases import JsonDict, JsonList, as_json_dict
+    from .workflow_effective_context import build_workflow_effective_context
 else:
     try:
-        from .type_aliases import JsonDict, JsonList
+        from .type_aliases import JsonDict, JsonList, as_json_dict
     except ImportError:
-        JsonDict: TypeAlias = dict[str, Any]
-        JsonList: TypeAlias = list[JsonDict]
+        from type_aliases import JsonDict, JsonList, as_json_dict
+
+    if __package__:
+        from .workflow_effective_context import build_workflow_effective_context
+    else:
+        from workflow_effective_context import build_workflow_effective_context
 
 SEPARATOR = "-" * 80
 
@@ -29,9 +33,6 @@ class WorkflowEffectiveContext(TypedDict):
     effective_full_rule_text: dict[str, str]
 
 
-WorkflowEffectiveContextFn = Callable[[JsonList, str], WorkflowEffectiveContext]
-
-
 class WorkflowIndex(TypedDict):
     steps: dict[str, JsonDict]
     next_steps: dict[str, list[str]]
@@ -39,33 +40,13 @@ class WorkflowIndex(TypedDict):
     invalidations_by_step: dict[str, list[str]]
     rollbacks_by_step: dict[str, list[str]]
     roots: list[str]
-
-
-def _load_build_workflow_effective_context() -> WorkflowEffectiveContextFn:
-    for module_name in (
-        "governance.workflow_effective_context",
-        "workflow_effective_context",
-    ):
-        try:
-            module = import_module(module_name)
-        except ModuleNotFoundError:
-            continue
-        func = getattr(module, "build_workflow_effective_context", None)
-        if callable(func):
-            return cast(WorkflowEffectiveContextFn, func)
-    raise ModuleNotFoundError("build_workflow_effective_context")
-
-
-build_workflow_effective_context = _load_build_workflow_effective_context()
-
-
 def load_jsonl(path: Path) -> JsonList:
     objs: JsonList = []
     with path.open("r", encoding="utf-8") as handle:
         for line in handle:
             line = line.strip()
             if line:
-                objs.append(json.loads(line))
+                objs.append(as_json_dict(cast(object, json.loads(line))))
     return objs
 
 
@@ -86,10 +67,25 @@ def _append_header(out: list[str], title: str) -> None:
     out.append(SEPARATOR)
 
 
+def _obj_list(value: object) -> list[object]:
+    return cast(list[object], value) if isinstance(value, list) else []
+
+
+def _str_list(value: object) -> list[str]:
+    return [str(item) for item in _obj_list(value)]
+
+
 def _fmt_list(values: list[str], *, empty: str = "-", limit: int | None = None) -> str:
     if not values:
         return empty
-    unique = list(dict.fromkeys(str(value) for value in values if str(value).strip()))
+    unique: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        unique.append(text)
     if not unique:
         return empty
     if limit is not None and len(unique) > limit:
@@ -109,7 +105,7 @@ def _id_list(values: object) -> list[str]:
     if not isinstance(values, list):
         return []
     out: list[str] = []
-    for item in values:
+    for item in cast(list[object], values):
         text = str(item).strip()
         if text:
             out.append(text)
@@ -247,17 +243,17 @@ def _append_surface_navigation(out: list[str], groups: dict[str, JsonList]) -> N
         surface = surfaces[surface_id]
         route_id = str(surface.get("route_ref", ""))
         route = routes.get(route_id, {})
-        provider_chain = [str(item) for item in route.get("provider_chain", [])]
+        provider_chain = _str_list(route.get("provider_chain", []))
         out.append(f"[{surface_id}]")
         out.append(f"  route: {route_id or '-'}")
-        required_caps = [str(item) for item in surface.get("requires_capabilities", [])]
+        required_caps = _str_list(surface.get("requires_capabilities", []))
         out.append("  requires_capabilities: " + _fmt_list(required_caps, limit=12))
         out.append(f"  provider_chain: {_fmt_list(provider_chain)}")
         out.append(f"  implementations: {_fmt_list(route_impls.get(route_id, []))}")
         provider_caps: list[str] = []
         for provider_id in provider_chain:
             provided_caps = providers.get(provider_id, {}).get("provides_capabilities", [])
-            provider_caps.extend(str(item) for item in provided_caps)
+            provider_caps.extend(_str_list(provided_caps))
         out.append(f"  provider_capabilities: {_fmt_list(provider_caps, limit=12)}")
         _append_rule_text_block(
             out,
@@ -279,8 +275,8 @@ def _append_route_navigation(out: list[str], groups: dict[str, JsonList]) -> Non
     for route_id in sorted(routes):
         route = routes[route_id]
         out.append(f"[{route_id}]")
-        covered_caps = [str(item) for item in route.get("covers_capabilities", [])]
-        provider_chain = [str(item) for item in route.get("provider_chain", [])]
+        covered_caps = _str_list(route.get("covers_capabilities", []))
+        provider_chain = _str_list(route.get("provider_chain", []))
         out.append("  covers_capabilities: " + _fmt_list(covered_caps, limit=12))
         out.append("  provider_chain: " + _fmt_list(provider_chain))
         out.append(f"  implementations: {_fmt_list(route_impls.get(route_id, []))}")
@@ -301,16 +297,16 @@ def _append_capability_navigation(out: list[str], groups: dict[str, JsonList]) -
     cap_providers: dict[str, list[str]] = defaultdict(list)
     for route in routes:
         route_id = str(route.get("id", ""))
-        for cap_id in route.get("covers_capabilities", []):
-            cap_routes[str(cap_id)].append(route_id)
+        for cap_id in _str_list(route.get("covers_capabilities", [])):
+            cap_routes[cap_id].append(route_id)
     for provider in providers:
         provider_id = str(provider.get("id", ""))
-        for cap_id in provider.get("provides_capabilities", []):
-            cap_providers[str(cap_id)].append(provider_id)
+        for cap_id in _str_list(provider.get("provides_capabilities", [])):
+            cap_providers[cap_id].append(provider_id)
     _append_header(out, "CAPABILITY NAVIGATION")
     for cap_id in sorted(caps):
         cap = caps[cap_id]
-        rule_ids = [str(item) for item in cap.get("triggers_rules", [])]
+        rule_ids = _str_list(cap.get("triggers_rules", []))
         out.append(f"[{cap_id}]")
         out.append(f"  rules_count: {len(rule_ids)}")
         out.append(f"  rules: {_fmt_list(rule_ids, limit=12)}")
@@ -329,7 +325,7 @@ def _append_implementation_navigation(out: list[str], groups: dict[str, JsonList
         impl = implementations[impl_id]
         out.append(f"[{impl_id}]")
         out.append(f"  implements_route: {impl.get('implements_route', '')}")
-        declared_caps = [str(item) for item in impl.get("declared_capabilities", [])]
+        declared_caps = _str_list(impl.get("declared_capabilities", []))
         out.append("  declared_capabilities: " + _fmt_list(declared_caps, limit=12))
         _append_rule_text_block(
             out,
@@ -489,8 +485,8 @@ def _append_workflow_step_details(
         out.append(f"  branch: {step.get('branch', '')}")
         out.append(f"  route_ref: {step.get('route_ref', '')}")
         out.append(f"  surface_ref: {step.get('surface_ref', '')}")
-        required_caps = [str(item) for item in step.get("required_capabilities", [])]
-        required_substeps = [str(item) for item in step.get("required_substeps", [])]
+        required_caps = _str_list(step.get("required_capabilities", []))
+        required_substeps = _str_list(step.get("required_substeps", []))
         out.append("  required_capabilities: " + _fmt_list(required_caps, limit=12))
         out.append("  required_substeps: " + _fmt_list(required_substeps))
         out.append(f"  next_steps: {_fmt_list(next_steps.get(step_id, []))}")
@@ -573,8 +569,8 @@ def build_navigation_json(objs: JsonList) -> JsonDict:
             "branch": step.get("branch", ""),
             "route_ref": step.get("route_ref", ""),
             "surface_ref": step.get("surface_ref", ""),
-            "required_capabilities": step.get("required_capabilities", []),
-            "required_substeps": step.get("required_substeps", []),
+            "required_capabilities": _str_list(step.get("required_capabilities", [])),
+            "required_substeps": _str_list(step.get("required_substeps", [])),
             "next_steps": next_steps.get(step_id, []),
             "invalidates": invalidations_by_step.get(step_id, []),
             "rollback_to": rollbacks_by_step.get(step_id, []),
@@ -610,7 +606,7 @@ def build_navigation_json(objs: JsonList) -> JsonDict:
                 ),
             }
         payload["workflow_root_details"] = root_details
-    return payload
+    return cast(JsonDict, payload)
 
 
 def render(path_in: Path, path_out: Path, *, as_json: bool = False) -> None:
@@ -627,18 +623,35 @@ def render(path_in: Path, path_out: Path, *, as_json: bool = False) -> None:
     path_out.write_text("\n".join(build_navigation_lines(objs)), encoding="utf-8")
 
 
-def main(argv: list[str]) -> int:
+@dataclass(frozen=True)
+class NavigatorArgs:
+    input_jsonl: str
+    output: str | None
+    as_json: bool
+
+
+def _parse_args(argv: list[str]) -> NavigatorArgs:
     parser = argparse.ArgumentParser()
     parser.add_argument("input_jsonl")
     parser.add_argument("output", nargs="?")
     parser.add_argument("--json", action="store_true")
-    args = parser.parse_args(argv[1:])
+    ns = parser.parse_args(argv[1:])
+    values = cast(dict[str, object], vars(ns))
+    return NavigatorArgs(
+        input_jsonl=str(values["input_jsonl"]),
+        output=(None if values.get("output") is None else str(values["output"])),
+        as_json=bool(values.get("json", False)),
+    )
+
+
+def main(argv: list[str]) -> int:
+    args = _parse_args(argv)
     in_path = Path(args.input_jsonl)
     if args.output:
         out_path = Path(args.output)
     else:
-        out_path = in_path.with_suffix(".nav.json" if args.json else ".nav.txt")
-    render(in_path, out_path, as_json=args.json)
+        out_path = in_path.with_suffix(".nav.json" if args.as_json else ".nav.txt")
+    render(in_path, out_path, as_json=args.as_json)
     print(str(out_path))
     return 0
 

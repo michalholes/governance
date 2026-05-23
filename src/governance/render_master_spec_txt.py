@@ -1,31 +1,35 @@
 import json
 import sys
 from collections import Counter
-from collections.abc import Callable
-from importlib import import_module
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeAlias, cast
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
-    from .type_aliases import JsonDict, JsonList
+    from .gov_navigator import build_navigation_lines
+    from .type_aliases import JsonDict, JsonList, as_json_dict
 else:
     try:
-        from .type_aliases import JsonDict, JsonList
+        from .gov_navigator import build_navigation_lines
+        from .type_aliases import JsonDict, JsonList, as_json_dict
     except ImportError:
-        JsonDict: TypeAlias = dict[str, Any]
-        JsonList: TypeAlias = list[JsonDict]
+        from gov_navigator import build_navigation_lines
+        from type_aliases import JsonDict, JsonList, as_json_dict
 
 
-def _load_build_navigation_lines() -> Callable[[JsonList], list[str]]:
-    for module_name in ("governance.gov_navigator", "gov_navigator"):
-        try:
-            module = import_module(module_name)
-        except ModuleNotFoundError:
-            continue
-        func = getattr(module, "build_navigation_lines", None)
-        if callable(func):
-            return cast(Callable[[JsonList], list[str]], func)
-    raise ModuleNotFoundError("build_navigation_lines")
+def _list_value(value: object) -> list[object]:
+    return cast(list[object], value) if isinstance(value, list) else []
+
+
+def _int_value(value: object) -> int:
+    return value if isinstance(value, int) else 0
+
+
+def _id_sort_key(item: JsonDict) -> str:
+    return str(item.get("id", ""))
+
+
+def _order_sort_key(item: JsonDict) -> int:
+    return _int_value(item.get("order", 0))
 
 
 def load_jsonl(path: Path) -> JsonList:
@@ -34,7 +38,7 @@ def load_jsonl(path: Path) -> JsonList:
         for line in handle:
             line = line.strip()
             if line:
-                objs.append(json.loads(line))
+                objs.append(as_json_dict(cast(object, json.loads(line))))
     return objs
 
 
@@ -53,16 +57,18 @@ def index_by_type(objs: JsonList) -> tuple[JsonDict | None, dict[str, JsonList]]
 def fmt_source(obj: JsonDict) -> str:
     source_span = obj.get("source_span")
     if isinstance(source_span, dict):
-        file_name = source_span.get("file", "?")
-        start = source_span.get("start_line", source_span.get("line", "?"))
-        end = source_span.get("end_line")
+        span = cast(JsonDict, source_span)
+        file_name = span.get("file", "?")
+        start = span.get("start_line", span.get("line", "?"))
+        end = span.get("end_line")
         if end is None or end == start:
             return f"{file_name}#L{start}"
         return f"{file_name}#L{start}-L{end}"
     migration_source = obj.get("migration_source")
     if isinstance(migration_source, dict):
-        file_name = migration_source.get("file", "?")
-        line = migration_source.get("line", "?")
+        source = cast(JsonDict, migration_source)
+        file_name = source.get("file", "?")
+        line = source.get("line", "?")
         return f"{file_name}#L{line}"
     if isinstance(migration_source, str) and migration_source:
         return migration_source
@@ -91,11 +97,13 @@ def append_counts(out: list[str], groups: dict[str, JsonList]) -> None:
 
 
 def append_bindings(out: list[str], groups: dict[str, JsonList]) -> None:
-    bindings = groups.get("obligation_binding", [])
-    oracles = {obj.get("id", ""): obj for obj in groups.get("oracle", [])}
+    bindings: JsonList = groups.get("obligation_binding", [])
+    oracles: dict[str, JsonDict] = {
+        str(obj.get("id", "")): obj for obj in groups.get("oracle", [])
+    }
     out.append("AUTHORITY BINDINGS")
     out.append("-" * 80)
-    for binding in sorted(bindings, key=lambda item: item.get("id", "")):
+    for binding in sorted(bindings, key=_id_sort_key):
         binding_id = binding.get("id", "")
         match = binding.get("match", {})
         out.append(f"[{binding_id}]")
@@ -109,7 +117,7 @@ def append_bindings(out: list[str], groups: dict[str, JsonList]) -> None:
         semantics = str(binding.get("authoritative_semantics", ""))
         out.append("  authoritative_semantics:")
         out.append(f"    {semantics}")
-        peer_renderers = binding.get("peer_renderers", [])
+        peer_renderers = _list_value(binding.get("peer_renderers", []))
         out.append(f"  peer_renderers ({len(peer_renderers)}):")
         for item in peer_renderers:
             out.append(f"    - {item}")
@@ -148,13 +156,13 @@ def append_rules(out: list[str], groups: dict[str, JsonList]) -> None:
 
 
 def append_sections_and_notes(out: list[str], groups: dict[str, JsonList]) -> None:
-    sections = groups.get("section", [])
-    notes = groups.get("note", [])
-    source_meta = groups.get("source_meta", [])
+    sections: JsonList = groups.get("section", [])
+    notes: JsonList = groups.get("note", [])
+    source_meta: JsonList = groups.get("source_meta", [])
     if sections:
         out.append("SECTIONS")
         out.append("-" * 80)
-        for section in sorted(sections, key=lambda item: item.get("order", 0)):
+        for section in sorted(sections, key=_order_sort_key):
             section_id = section.get("id", "")
             out.append(f"[{section_id}]")
             out.append(f"  heading_path: {section.get('heading_path', '')}")
@@ -168,7 +176,7 @@ def append_sections_and_notes(out: list[str], groups: dict[str, JsonList]) -> No
         out.append("NOTES")
         out.append("-" * 80)
         out.append(f"count: {len(notes)}")
-        sample = sorted(notes, key=lambda item: item.get("order", 0))[:10]
+        sample = sorted(notes, key=_order_sort_key)[:10]
         for note in sample:
             note_id = note.get("id", "")
             out.append(f"[{note_id}]")
@@ -189,7 +197,8 @@ def append_sections_and_notes(out: list[str], groups: dict[str, JsonList]) -> No
             out.append(f"  source_file: {item.get('source_file', '')}")
             payload = item.get("payload", {})
             if isinstance(payload, dict):
-                out.append(f"  payload_keys: {sorted(payload.keys())}")
+                payload_dict = cast(JsonDict, payload)
+                out.append(f"  payload_keys: {sorted(payload_dict.keys())}")
             else:
                 out.append(f"  payload_type: {type(payload).__name__}")
             out.append("")
@@ -203,7 +212,7 @@ def render(path_in: Path, path_out: Path) -> None:
     out.append("=" * 80)
     append_meta(out, meta)
     append_counts(out, groups)
-    out.extend(_load_build_navigation_lines()(objs))
+    out.extend(build_navigation_lines(objs))
     append_bindings(out, groups)
     append_rules(out, groups)
     append_sections_and_notes(out, groups)

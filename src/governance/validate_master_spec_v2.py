@@ -2,16 +2,15 @@ import json
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
-    from .type_aliases import JsonDict, JsonList
+    from .type_aliases import JsonDict, JsonList, as_json_dict
 else:
     try:
-        from .type_aliases import JsonDict, JsonList
+        from .type_aliases import JsonDict, JsonList, as_json_dict
     except ImportError:
-        JsonDict: TypeAlias = dict[str, Any]
-        JsonList: TypeAlias = list[JsonDict]
+        from type_aliases import JsonDict, JsonList, as_json_dict
 
 FORBIDDEN_FIELDS = {
     "derivation",
@@ -61,9 +60,23 @@ BINDING_REQUIRED_FIELDS = (
 )
 
 
+def _str_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in cast(list[object], value)]
+
+
+def _dict_value(value: object) -> JsonDict:
+    return cast(JsonDict, value) if isinstance(value, dict) else {}
+
+
 def load(path: Path) -> JsonList:
     with path.open(encoding="utf-8") as handle:
-        return [json.loads(line) for line in handle if line.strip()]
+        return [
+            as_json_dict(cast(object, json.loads(line)))
+            for line in handle
+            if line.strip()
+        ]
 
 
 def fail(message: str) -> None:
@@ -96,7 +109,7 @@ def validate_bindings(bindings: dict[str, JsonDict], oracles: dict[str, JsonDict
 def validate_rule_links(rules: dict[str, JsonDict], caps: dict[str, JsonDict]) -> None:
     rule_refs: defaultdict[str, int] = defaultdict(int)
     for capability_id, capability in caps.items():
-        for rule_id in capability.get("triggers_rules", []):
+        for rule_id in _str_list(capability.get("triggers_rules", [])):
             if rule_id not in rules:
                 fail(f"capability {capability_id} references missing rule {rule_id}")
             rule_refs[rule_id] += 1
@@ -110,7 +123,7 @@ def validate_routes(
 ) -> None:
     cap_route_refs: defaultdict[str, int] = defaultdict(int)
     for route_id, route in routes.items():
-        for capability_id in route.get("covers_capabilities", []):
+        for capability_id in _str_list(route.get("covers_capabilities", [])):
             if capability_id not in caps:
                 fail(f"route {route_id} references missing capability {capability_id}")
             cap_route_refs[capability_id] += 1
@@ -120,17 +133,17 @@ def validate_routes(
         if cap_route_refs[capability_id] == 0:
             fail(f"capability not covered by any route {capability_id}")
     for route_id, route in routes.items():
-        chain = route.get("provider_chain", [])
-        caps_needed = set(route.get("covers_capabilities", []))
-        provided = set()
-        seen = set()
+        chain = _str_list(route.get("provider_chain", []))
+        caps_needed = set(_str_list(route.get("covers_capabilities", [])) )
+        provided: set[str] = set()
+        seen: set[str] = set()
         for provider_id in chain:
             if provider_id in seen:
                 fail(f"route {route_id} provider_chain contains duplicate provider {provider_id}")
             seen.add(provider_id)
             if provider_id not in providers:
                 fail(f"route {route_id} references missing provider {provider_id}")
-            provided.update(providers[provider_id].get("provides_capabilities", []))
+            provided.update(_str_list(providers[provider_id].get("provides_capabilities", [])))
         missing = sorted(caps_needed - provided)
         if missing:
             fail(f"provider coverage in route {route_id} missing {missing}")
@@ -142,8 +155,9 @@ def validate_surfaces(routes: dict[str, JsonDict], surfaces: dict[str, JsonDict]
             fail(f"surface without route_ref {surface_id}")
         if not surface.get("requires_capabilities"):
             fail(f"surface without requires_capabilities {surface_id}")
-        if surface["route_ref"] not in routes:
-            fail(f"surface {surface_id} references missing route {surface['route_ref']}")
+        route_ref = str(surface.get("route_ref", ""))
+        if route_ref not in routes:
+            fail(f"surface {surface_id} references missing route {route_ref}")
 
 
 def validate_implementations(impls: dict[str, JsonDict], routes: dict[str, JsonDict]) -> None:
@@ -151,8 +165,8 @@ def validate_implementations(impls: dict[str, JsonDict], routes: dict[str, JsonD
         route_id = str(implementation.get("implements_route", "")).strip()
         if not route_id or route_id not in routes:
             fail(f"implementation {implementation_id} references missing route {route_id}")
-        required = set(routes[route_id].get("covers_capabilities", []))
-        declared = set(implementation.get("declared_capabilities", []))
+        required = set(_str_list(routes[route_id].get("covers_capabilities", [])))
+        declared = set(_str_list(implementation.get("declared_capabilities", [])))
         missing = sorted(required - declared)
         if missing:
             fail(f"implementation {implementation_id} missing capabilities {missing}")
@@ -197,13 +211,13 @@ def validate_workflow(
             fail(f"workflow_step {step_id} references missing route {route_ref}")
         if surfaces[surface_ref].get("route_ref") != route_ref:
             fail(f"workflow_step {step_id} surface/route mismatch {surface_ref}->{route_ref}")
-        required_caps = step.get("required_capabilities", [])
+        required_caps = _str_list(step.get("required_capabilities", []))
         if not required_caps:
             fail(f"workflow_step {step_id} missing required_capabilities")
         for capability_id in required_caps:
             if capability_id not in caps:
                 fail(f"workflow_step {step_id} references missing capability {capability_id}")
-        for substep_id in step.get("required_substeps", []):
+        for substep_id in _str_list(step.get("required_substeps", [])):
             if substep_id not in steps:
                 fail(f"workflow_step {step_id} references missing substep {substep_id}")
         entry_scope = step.get("entry_scope")
@@ -238,8 +252,8 @@ def validate_workflow(
         step_ref = str(gate.get("step_ref", "")).strip()
         if step_ref not in steps:
             fail(f"workflow_gate {gate_id} references missing step {step_ref}")
-        caps_list = gate.get("gate_capabilities", [])
-        rules_list = gate.get("gate_rule_ids", [])
+        caps_list = _str_list(gate.get("gate_capabilities", []))
+        rules_list = _str_list(gate.get("gate_rule_ids", []))
         if not caps_list and not rules_list:
             fail(f"workflow_gate {gate_id} missing gate_capabilities/gate_rule_ids")
         for capability_id in caps_list:
@@ -306,7 +320,7 @@ def main(path: str) -> None:
     if not objs or objs[0].get("type") != "meta":
         fail(": first object must be meta")
 
-    counts = objs[0].get("counts", {})
+    counts = _dict_value(objs[0].get("counts", {}))
     seen_ids: set[str] = set()
     rules: dict[str, JsonDict] = {}
     caps: dict[str, JsonDict] = {}
@@ -336,28 +350,29 @@ def main(path: str) -> None:
         if obj_type not in SUPPORTED_TYPES:
             fail(f"unsupported object type {obj_type}")
         ensure_unique_id(obj, seen_ids)
+        obj_id = str(obj.get("id", "")).strip()
         if obj_type == "rule":
-            rules[obj["id"]] = obj
+            rules[obj_id] = obj
         elif obj_type == "capability":
-            caps[obj["id"]] = obj
+            caps[obj_id] = obj
         elif obj_type == "provider":
-            providers[obj["id"]] = obj
+            providers[obj_id] = obj
         elif obj_type == "route":
-            routes[obj["id"]] = obj
+            routes[obj_id] = obj
         elif obj_type == "surface":
-            surfaces[obj["id"]] = obj
+            surfaces[obj_id] = obj
         elif obj_type == "implementation":
-            impls[obj["id"]] = obj
+            impls[obj_id] = obj
         elif obj_type == "workflow_step":
-            workflow_steps[obj["id"]] = obj
+            workflow_steps[obj_id] = obj
         elif obj_type == "workflow_transition":
-            workflow_transitions[obj["id"]] = obj
+            workflow_transitions[obj_id] = obj
         elif obj_type == "workflow_gate":
-            workflow_gates[obj["id"]] = obj
+            workflow_gates[obj_id] = obj
         elif obj_type == "workflow_invalidation":
-            workflow_invalidations[obj["id"]] = obj
+            workflow_invalidations[obj_id] = obj
         elif obj_type == "workflow_rollback":
-            workflow_rollbacks[obj["id"]] = obj
+            workflow_rollbacks[obj_id] = obj
         elif obj_type == "binding_meta":
             if binding_meta is not None:
                 fail(": exactly one binding_meta object is required")
@@ -389,11 +404,11 @@ def main(path: str) -> None:
                     fail(f"binding {binding_id} has empty field {field}")
             bindings[binding_id] = obj
         elif obj_type == "section":
-            sections[obj["id"]] = obj
+            sections[obj_id] = obj
         elif obj_type == "note":
-            notes[obj["id"]] = obj
+            notes[obj_id] = obj
         elif obj_type == "source_meta":
-            source_meta[obj["id"]] = obj
+            source_meta[obj_id] = obj
 
     if binding_meta is None:
         fail(": exactly one binding_meta object is required")
@@ -421,10 +436,10 @@ def main(path: str) -> None:
         "workflow_rollbacks": len(workflow_rollbacks),
     }
     for name, expected in count_expectations.items():
-        require_count(name, expected, counts.get(name))
+        require_count(name, expected, cast(int | None, counts.get(name)))
     for name, expected in optional_counts.items():
         if name in counts:
-            require_count(name, expected, counts.get(name))
+            require_count(name, expected, cast(int | None, counts.get(name)))
 
     validate_bindings(bindings, oracles)
     if caps:

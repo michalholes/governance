@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 # Canonical workflow-effective traversal authority for governance tooling.
-from typing import TYPE_CHECKING, Any, TypeAlias, TypedDict
+from typing import TYPE_CHECKING, TypedDict, cast
 
 if TYPE_CHECKING:
     from .type_aliases import JsonDict, JsonList
@@ -9,8 +9,11 @@ else:
     try:
         from .type_aliases import JsonDict, JsonList
     except ImportError:
-        JsonDict: TypeAlias = dict[str, Any]
-        JsonList: TypeAlias = list[JsonDict]
+        try:
+            from type_aliases import JsonDict, JsonList
+        except ImportError:
+            JsonDict = dict[str, object]
+            JsonList = list[JsonDict]
 
 
 class WorkflowEffectiveContextError(Exception):
@@ -39,7 +42,7 @@ def _id_list(values: object) -> list[str]:
     if not isinstance(values, list):
         return []
     out: list[str] = []
-    for item in values:
+    for item in cast(list[object], values):
         text = str(item).strip()
         if text:
             out.append(text)

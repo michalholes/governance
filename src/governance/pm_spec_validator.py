@@ -2,7 +2,9 @@ import argparse
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 from zipfile import ZipFile
 
 PATCH_PREFIX = "patches/per_file/"
@@ -16,14 +18,31 @@ def fail(code: str, detail: str) -> None:
     raise SystemExit(1)
 
 
-def parse_args(argv: list[str]) -> argparse.Namespace:
+@dataclass(frozen=True)
+class SpecValidatorArgs:
+    issue_id: str
+    commit_message: str
+    patch: str
+    workspace_snapshot: str
+    freeze: str
+
+
+def parse_args(argv: list[str]) -> SpecValidatorArgs:
     parser = argparse.ArgumentParser()
     parser.add_argument("issue_id")
     parser.add_argument("commit_message")
     parser.add_argument("patch")
     parser.add_argument("--workspace-snapshot", required=True)
     parser.add_argument("--freeze", required=True)
-    return parser.parse_args(argv)
+    ns = parser.parse_args(argv)
+    values = cast(dict[str, object], vars(ns))
+    return SpecValidatorArgs(
+        issue_id=str(values["issue_id"]),
+        commit_message=str(values["commit_message"]),
+        patch=str(values["patch"]),
+        workspace_snapshot=str(values["workspace_snapshot"]),
+        freeze=str(values["freeze"]),
+    )
 
 
 def read_zip(path: Path) -> dict[str, bytes]:

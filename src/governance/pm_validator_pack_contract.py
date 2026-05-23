@@ -3,32 +3,59 @@ from __future__ import annotations
 # Recomputes constraint-pack workflow context via the canonical authority module.
 import hashlib
 import json
+from collections.abc import Callable
+from importlib import import_module
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeAlias, cast
-
-import __main__ as _m
+from typing import TYPE_CHECKING, Protocol, cast
 
 if TYPE_CHECKING:
-    from .type_aliases import JsonDict, JsonList
+    from .type_aliases import JsonDict, JsonList, as_json_dict
 else:
     try:
-        from .type_aliases import JsonDict, JsonList
+        from .type_aliases import JsonDict, JsonList, as_json_dict
     except ImportError:
-        JsonDict: TypeAlias = dict[str, Any]
-        JsonList: TypeAlias = list[JsonDict]
+        from type_aliases import JsonDict, JsonList, as_json_dict
 
-R = _m.RuleResult
-VE = _m.ValidationError
-_rz, _dar, _iz = _m._read_zip, _m._decode_ascii_raw, _m._iter_zip_files
-AOP, IR, SBT = _m.AUTHORITY_ONLY_PATHS, _m.INSTRUCTIONS_REQUIRED, _m.SUPPORTED_BINDING_TYPES
+if TYPE_CHECKING:
+    from .pm_validator import RuleResult, ValidationError
+
+
+class _ValidatorArgs(Protocol):
+    repair_overlay: str | None
+    workspace_root: str | None
+    workspace_snapshot: str | None
+    supplemental_file: list[str]
+
+
+class _PMValidatorApi(Protocol):
+    RuleResult: type[RuleResult]
+    ValidationError: type[ValidationError]
+    AUTHORITY_ONLY_PATHS: set[str]
+    INSTRUCTIONS_REQUIRED: set[str]
+    SUPPORTED_BINDING_TYPES: set[str]
+
+
+def _load_pm_validator_api() -> _PMValidatorApi:
+    module_name = "__main__"
+    if __package__:
+        module_name = f"{__package__}.pm_validator"
+    return cast(_PMValidatorApi, import_module(module_name))
+
+
+_pm = _load_pm_validator_api()
+R = _pm.RuleResult
+VE = _pm.ValidationError
+_pm_dict = cast(dict[str, object], vars(_pm))
+_rz = cast(Callable[[Path], tuple[list[str], dict[str, bytes]]], _pm_dict["_read_zip"])
+_dar = cast(Callable[[bytes], str | None], _pm_dict["_decode_ascii_raw"])
+_iz = cast(Callable[[Path], dict[str, bytes]], _pm_dict["_iter_zip_files"])
+AOP, IR, SBT = _pm.AUTHORITY_ONLY_PATHS, _pm.INSTRUCTIONS_REQUIRED, _pm.SUPPORTED_BINDING_TYPES
 
 REPO_SPEC_PATH = "governance/specification.jsonl"
 GOVERNANCE_SPEC_PATH = "governance/governance.jsonl"
 SUPPORTED_AUTHORITY_SOURCES = {REPO_SPEC_PATH, GOVERNANCE_SPEC_PATH}
 
 if TYPE_CHECKING:
-    from argparse import Namespace
-
     from .pm_validator import RuleResult
 
 
@@ -37,6 +64,28 @@ def _workspace_root_file_bytes(path: Path, relpath: str) -> bytes | None:
     if not file_path.is_file():
         return None
     return file_path.read_bytes()
+
+
+def _json_dict_list(value: object) -> JsonList:
+    if not isinstance(value, list):
+        return []
+    out: JsonList = []
+    for item in cast(list[object], value):
+        if isinstance(item, dict):
+            out.append(cast(JsonDict, item))
+    return out
+
+
+def _sorted_object_list(value: object) -> list[object]:
+    if not isinstance(value, list):
+        return []
+    return sorted(cast(list[object], value), key=str)
+
+
+def _str_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in cast(list[object], value)]
 
 
 def _is_missing_repo_spec_error(err: str | None) -> bool:
@@ -56,28 +105,28 @@ else:
     )
 
 
-def _supplemental_governance_workflow_bytes(args: Namespace) -> bytes:
+def _supplemental_governance_workflow_bytes(args: _ValidatorArgs) -> bytes:
     if args.repair_overlay:
-        overlay = cast(dict[str, bytes], _iz(Path(args.repair_overlay)))
+        overlay = _iz(Path(args.repair_overlay))
         if GOVERNANCE_SPEC_PATH in overlay:
             return overlay[GOVERNANCE_SPEC_PATH]
-    if getattr(args, "workspace_root", None):
+    if args.workspace_root:
         raw = _workspace_root_file_bytes(Path(args.workspace_root), GOVERNANCE_SPEC_PATH)
         if raw is not None:
             return raw
     if args.workspace_snapshot:
-        snapshot = cast(dict[str, bytes], _iz(Path(args.workspace_snapshot)))
+        snapshot = _iz(Path(args.workspace_snapshot))
         if GOVERNANCE_SPEC_PATH in snapshot:
             return snapshot[GOVERNANCE_SPEC_PATH]
     raise VE("missing_governance_workflow_source")
 
 
 def _supported_authority_sources(pack: JsonDict) -> list[str]:
-    sources = pack.get("authoritative_sources", [])
-    if not isinstance(sources, list) or not sources:
+    sources_raw = pack.get("authoritative_sources", [])
+    if not isinstance(sources_raw, list) or not sources_raw:
         raise VE("pack_authoritative_sources_missing")
-    out = []
-    for item in sources:
+    out: list[str] = []
+    for item in cast(list[object], sources_raw):
         path = str(item or "").strip()
         if not path:
             raise VE("pack_authoritative_sources_empty")
@@ -89,28 +138,30 @@ def _supported_authority_sources(pack: JsonDict) -> list[str]:
     return out
 
 
-def _authority_source_bytes(args: Namespace, relpath: str) -> tuple[bytes | None, str | None]:
+def _authority_source_bytes(args: _ValidatorArgs, relpath: str) -> tuple[bytes | None, str | None]:
     if not args.repair_overlay:
-        if getattr(args, "workspace_root", None):
+        if args.workspace_root:
             raw = _workspace_root_file_bytes(Path(args.workspace_root), relpath)
             if raw is not None:
                 return raw, None
             return None, f"missing_source_in_workspace_root:{relpath}"
-        snapshot = cast(dict[str, bytes], _iz(Path(args.workspace_snapshot)))
+        assert args.workspace_snapshot is not None
+        snapshot = _iz(Path(args.workspace_snapshot))
         if relpath in snapshot:
             return snapshot[relpath], None
         return None, f"missing_source_in_workspace_snapshot:{relpath}"
-    overlay = cast(dict[str, bytes], _iz(Path(args.repair_overlay)))
+    assert args.repair_overlay is not None
+    overlay = _iz(Path(args.repair_overlay))
     if relpath in overlay:
         return overlay[relpath], None
     if relpath in set(args.supplemental_file):
-        if getattr(args, "workspace_root", None):
+        if args.workspace_root:
             raw = _workspace_root_file_bytes(Path(args.workspace_root), relpath)
             if raw is not None:
                 return raw, None
             return None, f"supplemental_source_missing_in_workspace_root:{relpath}"
         if args.workspace_snapshot:
-            snapshot = cast(dict[str, bytes], _iz(Path(args.workspace_snapshot)))
+            snapshot = _iz(Path(args.workspace_snapshot))
             if relpath in snapshot:
                 return snapshot[relpath], None
             return None, f"supplemental_source_missing_in_snapshot:{relpath}"
@@ -139,7 +190,7 @@ BINDING_REQUIRED_FIELDS = (
 
 
 def _rr(i: str, s: str, d: str) -> RuleResult:
-    return cast("RuleResult", R(i, s, d))
+    return R(i, s, d)
 
 
 def _decode_utf8_text(raw: bytes) -> str | None:
@@ -161,19 +212,29 @@ def _normalize_single_ascii_line(raw: bytes) -> tuple[str | None, str | None]:
     return (None, "must_be_non_empty") if value == "" else (value, None)
 
 
-def _su(bindings: JsonList, field: str) -> list[Any]:
-    return sorted({i for b in bindings for i in b.get(field, [])})
+def _su(bindings: JsonList, field: str) -> list[object]:
+    values: set[object] = set()
+    for binding in bindings:
+        raw = binding.get(field)
+        if not isinstance(raw, list):
+            continue
+        for item in cast(list[object], raw):
+            values.add(item)
+    return sorted(values, key=str)
 
 
-def _bm(bindings: JsonList, key: str, value: str) -> dict[str, Any]:
-    return {str(binding[key]): binding[value] for binding in bindings}
+def _bm(bindings: JsonList, key: str, value: str) -> dict[str, object]:
+    out: dict[str, object] = {}
+    for binding in bindings:
+        out[str(binding.get(key, ""))] = binding.get(value)
+    return out
 
 
 def _read_instructions_zip(
     path: str | Path | None,
 ) -> tuple[list[RuleResult], JsonDict | None, bytes | None, str | None]:
     if path is None or not Path(path).is_file():
-        out = [
+        out: list[RuleResult] = [
             _rr("INSTRUCTIONS_EXTENSION", "FAIL", "instructions_zip_not_found"),
             _rr("INSTRUCTIONS_LAYOUT", "FAIL", "missing_instructions_zip"),
             _rr("INSTRUCTIONS_HANDOFF", "FAIL", "missing_instructions_zip"),
@@ -222,14 +283,14 @@ def _read_instructions_zip(
             "handoff_readable" if hok else "missing_or_non_utf8_handoff",
         )
     )
-    pack = None
+    pack: JsonDict | None = None
     if pack_raw is None:
         out.append(_rr("PACK_JSON", "FAIL", "missing_pack_json"))
     else:
         try:
-            pack = json.loads(pack_raw.decode("utf-8"))
+            pack = as_json_dict(cast(object, json.loads(pack_raw.decode("utf-8"))))
             out.append(_rr("PACK_JSON", "PASS", "pack_json_readable"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
             out.append(_rr("PACK_JSON", "FAIL", "invalid_pack_json"))
     hv, he = (
         (None, "missing_hash_pack") if hash_raw is None else _normalize_single_ascii_line(hash_raw)
@@ -253,16 +314,14 @@ def _load_jsonl_bytes(raw: bytes) -> JsonList:
     text = _decode_utf8_text(raw)
     if text is None:
         raise VE("spec_not_utf8")
-    out = []
+    out: JsonList = []
     for idx, line in enumerate(text.splitlines(), start=1):
         if not line.strip():
             continue
         try:
-            obj = json.loads(line)
+            obj = as_json_dict(cast(object, json.loads(line)))
         except json.JSONDecodeError as exc:
             raise VE(f"spec_jsonl_invalid_line:{idx}:{exc.msg}") from exc
-        if not isinstance(obj, dict):
-            raise VE(f"spec_jsonl_non_object:{idx}")
         out.append(obj)
     return out
 
@@ -294,8 +353,9 @@ def _collect_binding_meta_and_bindings(
         missing = [field for field in BINDING_REQUIRED_FIELDS if field not in obj]
         if missing:
             raise VE(f"binding_missing_fields:{bid}:{','.join(missing)}")
-        if obj["binding_type"] not in SBT:
-            raise VE(f"binding_type_unsupported:{bid}:{obj['binding_type']}")
+        binding_type = str(obj.get("binding_type", "")).strip()
+        if binding_type not in SBT:
+            raise VE(f"binding_type_unsupported:{bid}:{binding_type}")
         for field in (
             "verification_mode",
             "verification_method",
@@ -311,7 +371,8 @@ def _collect_binding_meta_and_bindings(
 
 
 def _binding_is_active(binding: JsonDict, mode: str, target_scope: str) -> bool:
-    match = binding.get("match", {})
+    match_raw = binding.get("match", {})
+    match = cast(JsonDict, match_raw) if isinstance(match_raw, dict) else {}
     return binding.get("binding_type") == "constraint_pack" or (
         match.get("phase") == mode and match.get("target") == target_scope
     )
@@ -390,7 +451,7 @@ def _resolve_workflow_contract(objects: JsonList, target_scope: str, mode: str) 
     title = str(step.get("display_name", step_id)).strip() or step_id
     surface_ref = str(step.get("surface_ref", "")).strip()
     route_ref = str(step.get("route_ref", "")).strip()
-    required_capabilities = [str(item) for item in step.get("required_capabilities", [])]
+    required_capabilities = _str_list(step.get("required_capabilities", []))
     summary = (
         f"entry_step={title}; surface={surface_ref}; route={route_ref}; "
         f"required_gates={required_gates}; next_steps={next_steps}"
@@ -432,7 +493,7 @@ def _build_pack_from_spec_bytes(
     try:
         workflow_effective = build_workflow_effective_context(
             workflow_objects,
-            workflow_contract["workflow_entry_step_id"],
+            str(workflow_contract["workflow_entry_step_id"]),
         )
     except WorkflowEffectiveContextError as exc:
         raise VE(str(exc)) from exc
@@ -472,7 +533,7 @@ def _build_pack_from_spec_bytes(
 
 
 def _authority_spec_bytes(
-    args: Namespace, pack: JsonDict
+    args: _ValidatorArgs, pack: JsonDict
 ) -> tuple[bytes | None, str | None, str | None]:
     try:
         sources = _supported_authority_sources(pack)
@@ -486,7 +547,7 @@ def _authority_spec_bytes(
 def _pack_union_rule(
     rule_id: str, pack: JsonDict, key: str, active_bindings: JsonList, field: str
 ) -> RuleResult:
-    exp, act = _su(active_bindings, field), sorted(pack.get(key, []))
+    exp, act = _su(active_bindings, field), _sorted_object_list(pack.get(key, []))
     return _rr(rule_id, "PASS" if act == exp else "FAIL", f"expected={exp}:actual={act}")
 
 
@@ -514,7 +575,9 @@ def _scope_mapping_rule(decision_paths: list[str], pack: JsonDict) -> RuleResult
 def _forbidden_bypass_rule(
     patch_member_names: list[str], pack: JsonDict, active_bindings: JsonList
 ) -> RuleResult:
-    exp, act = _su(active_bindings, "forbidden"), sorted(pack.get("forbidden_strategies", []))
+    exp, act = _su(active_bindings, "forbidden"), _sorted_object_list(
+        pack.get("forbidden_strategies", [])
+    )
     if act != exp:
         return _rr("PACK_FORBIDDEN_BYPASS", "FAIL", f"expected={exp}:actual={act}")
     blocked = {"HANDOFF.md", "constraint_pack.json", "hash_pack.txt"}
@@ -527,7 +590,7 @@ def _forbidden_bypass_rule(
 
 
 def _recompute_pack_rule(
-    args: Namespace, pack: JsonDict, pack_raw: bytes | None
+    args: _ValidatorArgs, pack: JsonDict, pack_raw: bytes | None
 ) -> tuple[RuleResult, JsonList | None]:
     spec_raw, err, source_path = _authority_spec_bytes(args, pack)
     if err is not None or spec_raw is None or source_path is None:
@@ -566,7 +629,7 @@ def _pack_rule_verdicts(
     pack: JsonDict, active_bindings: JsonList, support_rules: dict[str, RuleResult]
 ) -> list[RuleResult]:
     out: list[RuleResult] = []
-    bindings = active_bindings if active_bindings is not None else pack.get("active_bindings", [])
+    bindings = active_bindings
     for binding in bindings:
         bid = str(binding.get("id", "<missing-id>"))
         mode = str(binding.get("verification_mode", "")).strip()
@@ -594,7 +657,9 @@ def _pack_rule_verdicts(
 
 
 def _verdict_coverage_rule(pack: JsonDict, verdicts: list[RuleResult]) -> RuleResult:
-    exp = sorted(str(b.get("id", "<missing-id>")) for b in pack.get("active_bindings", []))
+    exp = sorted(
+        str(b.get("id", "<missing-id>")) for b in _json_dict_list(pack.get("active_bindings"))
+    )
     act = sorted(v.rule_id.split(":", 1)[1] for v in verdicts if v.rule_id.startswith("PACK_RULE:"))
     return _rr(
         "PACK_VERDICT_COVERAGE", "PASS" if act == exp else "FAIL", f"expected={exp}:actual={act}"
@@ -602,7 +667,7 @@ def _verdict_coverage_rule(pack: JsonDict, verdicts: list[RuleResult]) -> RuleRe
 
 
 def _pack_rules(
-    args: Namespace,
+    args: _ValidatorArgs,
     instructions_path: str | Path | None,
     decision_paths: list[str],
     patch_member_names: list[str],
@@ -612,7 +677,7 @@ def _pack_rules(
         return out, None
     recompute, active = _recompute_pack_rule(args, pack, pack_raw)
     out.append(recompute)
-    active = pack.get("active_bindings", []) if active is None else active
+    active = _json_dict_list(pack.get("active_bindings")) if active is None else active
     out.append(
         _pack_union_rule("PACK_REQUIRED_WIRING", pack, "required_wiring", active, "required_wiring")
     )
@@ -642,3 +707,6 @@ def _pack_rules(
     out.extend(verdicts)
     out.append(_verdict_coverage_rule(pack, verdicts))
     return out, pack
+
+
+__all__ = ["_pack_rules"]

@@ -5,18 +5,27 @@ import hashlib
 import json
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NoReturn, TypeAlias
+from typing import TYPE_CHECKING, NoReturn, cast
 from zipfile import ZipFile
 
 if TYPE_CHECKING:
-    from .type_aliases import JsonDict, JsonList
+    from .type_aliases import JsonDict, JsonList, as_json_dict
 else:
     try:
-        from .type_aliases import JsonDict, JsonList
+        from .type_aliases import JsonDict, JsonList, as_json_dict
     except ImportError:
-        JsonDict: TypeAlias = dict[str, Any]
-        JsonList: TypeAlias = list[JsonDict]
+        try:
+            from type_aliases import JsonDict, JsonList, as_json_dict
+        except ImportError:
+            JsonDict = dict[str, object]
+            JsonList = list[JsonDict]
+
+            def as_json_dict(value: object) -> JsonDict:
+                if not isinstance(value, dict):
+                    raise ValueError("expected_json_object")
+                return cast(JsonDict, value)
 
 if TYPE_CHECKING or __package__:
     from .workflow_effective_context import (
@@ -34,6 +43,17 @@ REPO_SPEC_PATH = "governance/specification.jsonl"
 AUTHORITY_ONLY_PATHS = {GOVERNANCE_SPEC_PATH, REPO_SPEC_PATH}
 
 
+@dataclass(frozen=True)
+class ResolverArgs:
+    target: str
+    workspace_snapshot: str | None
+    workspace_root: str | None
+    spec: str
+    handoff_output: str
+    pack_output: str
+    hash_output: str
+
+
 def _default_spec_path(repo_path: str) -> str:
     if repo_path in AUTHORITY_ONLY_PATHS:
         return repo_path
@@ -45,7 +65,7 @@ def _load_jsonl_bytes(raw: bytes) -> JsonList:
     for line in raw.decode("utf-8").splitlines():
         line = line.strip()
         if line:
-            objects.append(json.loads(line))
+            objects.append(as_json_dict(cast(object, json.loads(line))))
     return objects
 
 
@@ -63,6 +83,18 @@ def _workflow_objects(
     if governance_workflow_raw is None or spec_path == GOVERNANCE_SPEC_PATH:
         return spec_objects
     return _load_jsonl_bytes(governance_workflow_raw)
+
+
+def _dict_value(value: object) -> JsonDict:
+    return cast(JsonDict, value) if isinstance(value, dict) else {}
+
+
+def _list_value(value: object) -> list[object]:
+    return cast(list[object], value) if isinstance(value, list) else []
+
+
+def _str_list(value: object) -> list[str]:
+    return [str(item) for item in _list_value(value)]
 
 
 UNBOUND = "RULE RESOLVER: FAIL - unbound_target"
@@ -108,7 +140,7 @@ def fail_missing_repo_spec() -> NoReturn:
     raise SystemExit(1)
 
 
-def parse_args(argv: list[str]) -> argparse.Namespace:
+def parse_args(argv: list[str]) -> ResolverArgs:
     parser = argparse.ArgumentParser()
     parser.add_argument("target")
     group = parser.add_mutually_exclusive_group(required=True)
@@ -118,7 +150,23 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--handoff-output", required=True)
     parser.add_argument("--pack-output", required=True)
     parser.add_argument("--hash-output", required=True)
-    return parser.parse_args(argv)
+    ns = parser.parse_args(argv)
+    values = cast(dict[str, object], vars(ns))
+    return ResolverArgs(
+        target=str(values["target"]),
+        workspace_snapshot=(
+            None
+            if values.get("workspace_snapshot") is None
+            else str(values["workspace_snapshot"])
+        ),
+        workspace_root=(
+            None if values.get("workspace_root") is None else str(values["workspace_root"])
+        ),
+        spec=str(values["spec"]),
+        handoff_output=str(values["handoff_output"]),
+        pack_output=str(values["pack_output"]),
+        hash_output=str(values["hash_output"]),
+    )
 
 
 def read_snapshot(path: Path) -> dict[str, bytes]:
@@ -138,9 +186,10 @@ def read_workspace_root(path: Path) -> dict[str, bytes]:
     return out
 
 
-def read_workspace(args: argparse.Namespace) -> dict[str, bytes]:
+def read_workspace(args: ResolverArgs) -> dict[str, bytes]:
     if args.workspace_root:
         return read_workspace_root(Path(args.workspace_root))
+    assert args.workspace_snapshot is not None
     return read_snapshot(Path(args.workspace_snapshot))
 
 
@@ -226,7 +275,7 @@ def collect_objects(objects: JsonList) -> tuple[JsonDict, JsonList, dict[str, Js
 def active_bindings(bindings: JsonList, mode: str, scope: str) -> JsonList:
     active: JsonList = []
     for binding in bindings:
-        match = binding.get("match", {})
+        match = _dict_value(binding.get("match", {}))
         if binding.get("binding_type") == "constraint_pack":
             active.append(binding)
             continue
@@ -265,12 +314,12 @@ def ensure_consistency(bindings: JsonList, oracles: dict[str, JsonDict]) -> None
 
 
 def union_values(bindings: JsonList, field: str) -> list[object]:
-    values = {item for binding in bindings for item in binding.get(field, [])}
-    return sorted(values)
+    values = {item for binding in bindings for item in _list_value(binding.get(field, []))}
+    return sorted(values, key=str)
 
 
 def binding_map(bindings: JsonList, key: str, value: str) -> dict[str, str]:
-    return {binding[key]: binding[value] for binding in bindings}
+    return {str(binding.get(key, "")): str(binding.get(value, "")) for binding in bindings}
 
 
 def _resolve_workflow_contract(objects: JsonList, scope: str, mode: str) -> JsonDict:
@@ -314,7 +363,7 @@ def _resolve_workflow_contract(objects: JsonList, scope: str, mode: str) -> Json
     title = str(step.get("display_name", step_id)).strip() or step_id
     surface_ref = str(step.get("surface_ref", "")).strip()
     route_ref = str(step.get("route_ref", "")).strip()
-    required_capabilities = [str(item) for item in step.get("required_capabilities", [])]
+    required_capabilities = _str_list(step.get("required_capabilities", []))
     summary = (
         f"entry_step={title}; surface={surface_ref}; route={route_ref}; "
         f"required_gates={required_gates}; next_steps={next_steps}"
@@ -355,7 +404,7 @@ def build_pack(
     try:
         workflow_effective = build_workflow_effective_context(
             workflow_objects,
-            workflow_contract["workflow_entry_step_id"],
+            str(workflow_contract["workflow_entry_step_id"]),
         )
     except WorkflowEffectiveContextError:
         fail_unbound()
@@ -448,7 +497,7 @@ def main(argv: list[str]) -> None:
         spec_path=args.spec,
         governance_workflow_raw=governance_workflow_raw,
     )
-    pack = json.loads(pack_bytes.decode("utf-8"))
+    pack = as_json_dict(cast(object, json.loads(pack_bytes.decode("utf-8"))))
     workflow_contract = {
         "workflow_entry_step_id": pack["workflow_entry_step_id"],
         "workflow_entry_title": pack["workflow_entry_title"],
