@@ -98,9 +98,7 @@ def append_counts(out: list[str], groups: dict[str, JsonList]) -> None:
 
 def append_bindings(out: list[str], groups: dict[str, JsonList]) -> None:
     bindings: JsonList = groups.get("obligation_binding", [])
-    oracles: dict[str, JsonDict] = {
-        str(obj.get("id", "")): obj for obj in groups.get("oracle", [])
-    }
+    oracles: dict[str, JsonDict] = {str(obj.get("id", "")): obj for obj in groups.get("oracle", [])}
     out.append("AUTHORITY BINDINGS")
     out.append("-" * 80)
     for binding in sorted(bindings, key=_id_sort_key):

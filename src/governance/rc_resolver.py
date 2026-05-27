@@ -27,6 +27,7 @@ else:
                     raise ValueError("expected_json_object")
                 return cast(JsonDict, value)
 
+
 if TYPE_CHECKING or __package__:
     from .workflow_effective_context import (
         WorkflowEffectiveContextError,
@@ -155,9 +156,7 @@ def parse_args(argv: list[str]) -> ResolverArgs:
     return ResolverArgs(
         target=str(values["target"]),
         workspace_snapshot=(
-            None
-            if values.get("workspace_snapshot") is None
-            else str(values["workspace_snapshot"])
+            None if values.get("workspace_snapshot") is None else str(values["workspace_snapshot"])
         ),
         workspace_root=(
             None if values.get("workspace_root") is None else str(values["workspace_root"])

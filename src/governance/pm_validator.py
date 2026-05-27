@@ -908,9 +908,7 @@ def _parse_args(argv: list[str]) -> ValidatorArgs:
         patch=str(values["patch"]),
         instructions_zip=str(values["instructions_zip"]),
         workspace_snapshot=(
-            None
-            if values.get("workspace_snapshot") is None
-            else str(values["workspace_snapshot"])
+            None if values.get("workspace_snapshot") is None else str(values["workspace_snapshot"])
         ),
         workspace_root=(
             None if values.get("workspace_root") is None else str(values["workspace_root"])

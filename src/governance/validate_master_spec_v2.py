@@ -72,11 +72,7 @@ def _dict_value(value: object) -> JsonDict:
 
 def load(path: Path) -> JsonList:
     with path.open(encoding="utf-8") as handle:
-        return [
-            as_json_dict(cast(object, json.loads(line)))
-            for line in handle
-            if line.strip()
-        ]
+        return [as_json_dict(cast(object, json.loads(line))) for line in handle if line.strip()]
 
 
 def fail(message: str) -> None:
@@ -134,7 +130,7 @@ def validate_routes(
             fail(f"capability not covered by any route {capability_id}")
     for route_id, route in routes.items():
         chain = _str_list(route.get("provider_chain", []))
-        caps_needed = set(_str_list(route.get("covers_capabilities", [])) )
+        caps_needed = set(_str_list(route.get("covers_capabilities", [])))
         provided: set[str] = set()
         seen: set[str] = set()
         for provider_id in chain:

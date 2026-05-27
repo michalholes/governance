@@ -40,6 +40,8 @@ class WorkflowIndex(TypedDict):
     invalidations_by_step: dict[str, list[str]]
     rollbacks_by_step: dict[str, list[str]]
     roots: list[str]
+
+
 def load_jsonl(path: Path) -> JsonList:
     objs: JsonList = []
     with path.open("r", encoding="utf-8") as handle:

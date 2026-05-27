@@ -575,8 +575,9 @@ def _scope_mapping_rule(decision_paths: list[str], pack: JsonDict) -> RuleResult
 def _forbidden_bypass_rule(
     patch_member_names: list[str], pack: JsonDict, active_bindings: JsonList
 ) -> RuleResult:
-    exp, act = _su(active_bindings, "forbidden"), _sorted_object_list(
-        pack.get("forbidden_strategies", [])
+    exp, act = (
+        _su(active_bindings, "forbidden"),
+        _sorted_object_list(pack.get("forbidden_strategies", [])),
     )
     if act != exp:
         return _rr("PACK_FORBIDDEN_BYPASS", "FAIL", f"expected={exp}:actual={act}")
